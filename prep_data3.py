@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 import numpy as np
 import utils
@@ -5,6 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 import talib
 import joblib
+
 
 
 def load_data():
@@ -77,6 +80,34 @@ def cluster_macro_hmm(macro_scaled):
     return predicted_regimes, best_k  # Return cluster assignments
 
 
+from sklearn.mixture import GaussianMixture
+def cluster_macro_gmm(macro_df, n_components=3):
+    gmm = GaussianMixture(n_components=n_components, covariance_type='full', random_state=42)
+    regimes = gmm.fit_predict(macro_df)
+
+    return regimes
+
+def find_optimal_gmm_clusters(macro_scaled, max_clusters=10):
+    print("🔍 Finding Optimal GMM Clusters...")
+
+    bic_scores = []
+    aic_scores = []
+    n_components_range = range(1, max_clusters+1)
+
+    for n in tqdm(n_components_range, desc="Evaluating GMM clusters"):
+        gmm = GaussianMixture(n_components=n, covariance_type='full', random_state=42)
+        gmm.fit(macro_scaled)
+
+        bic_scores.append(gmm.bic(macro_scaled))
+        aic_scores.append(gmm.aic(macro_scaled))
+
+    # Optimal cluster count (lowest BIC)
+    optimal_n = n_components_range[np.argmin(bic_scores)]
+    print(f"✅ Optimal number of clusters based on BIC: {optimal_n}")
+
+    return optimal_n
+
+
 def compute_macro_features(macro_df, cols):
     print("=== Computing Macro Features ===")
     macro_df = macro_df.copy()
@@ -128,8 +159,11 @@ def compute_macro_features(macro_df, cols):
     macro_scaled = scaler.fit_transform(macro_df[cols+moar].dropna(subset=cols))
     joblib.dump(scaler, 'data/features/macro_scaler.pkl')
 
-    clustered_df, best_k = cluster_macro_hmm(macro_scaled)
-    print(f"Optimal number of macro clusters: {best_k}")
+    # clustered_df, best_k = cluster_macro_hmm(macro_scaled)
+    # print(f"Optimal number of macro clusters: {best_k}")
+    optimal_clusters = find_optimal_gmm_clusters(macro_scaled)
+    clustered_df = cluster_macro_gmm(macro_scaled, optimal_clusters)
+    print(clustered_df)
 
     macro_df.loc[macro_df.dropna().index, 'Macro_Regime'] = clustered_df
 
@@ -177,38 +211,28 @@ def compute_spread_features(spreads_df, lookback_windows=[5, 10, 20]):
 
     # ** Efficiently join all features back into the original DataFrame **
     spreads_df = pd.concat([spreads_df, pd.DataFrame(new_features, index=spreads_df.index)], axis=1)
+    print(spreads_df.tail(3))
 
     print("=== Spread Features Computed ===")
     return spreads_df.dropna()
 
 
 import shap
-import matplotlib.pyplot as plt
 from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBRegressor
-def evaluate_feature_importance(spreads_df):
-    print("=== Evaluating Feature Importance (Time-Series Aware) ===")
+def evaluate_feature_importance(spreads_df, corr_threshold, importance_threshold):
+    # print("=== Evaluating Feature Importance (Time-Series Aware) ===")
 
     target_spreads = ['1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8']
-
-    # Ensure 'Trade_Date' is handled properly
-    if 'Trade_Date' in spreads_df.columns:
-        spreads_df = spreads_df.set_index('Trade_Date')
-
+    if 'Trade_Date' in spreads_df.columns: spreads_df = spreads_df.set_index('Trade_Date')
     features = spreads_df.drop(columns=target_spreads, errors='ignore').select_dtypes(include=[np.number])
-
     important_features_dict = {}
 
     for spread in target_spreads:
-        print(f"\n🔍 Evaluating features for {spread} spread...")
-
         target = spreads_df[spread]
-
-        # Drop rows with missing values
         data = pd.concat([features, target], axis=1).dropna()
         X, y = data.drop(columns=[spread]), data[spread]
 
-        # Time-Series Split (instead of random split)
         tscv = TimeSeriesSplit(n_splits=5)
 
         feature_importance = np.zeros(X.shape[1])
@@ -217,104 +241,143 @@ def evaluate_feature_importance(spreads_df):
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
             y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-            # Train XGBoost model
             model = XGBRegressor(n_estimators=100, learning_rate=0.05, max_depth=3, random_state=42)
             model.fit(X_train, y_train)
 
-            # Compute SHAP values
             explainer = shap.TreeExplainer(model)
             shap_values = explainer.shap_values(X_test)
-
-            # Aggregate feature importance
             feature_importance += np.abs(shap_values).mean(axis=0)
 
         # Normalize importance
         feature_importance /= tscv.get_n_splits()
 
-        # Create DataFrame
+        # Create a DataFrame with feature importances
         feature_importance_df = pd.DataFrame({
             'Feature': X.columns,
             'Importance': feature_importance
         }).sort_values(by='Importance', ascending=False)
 
-        # Keep only the top 10 features
-        top_features = feature_importance_df.head(20)['Feature'].tolist()
-        important_features_dict[spread] = top_features
+        # Keep only features with importance above threshold
+        feature_importance_df = feature_importance_df[feature_importance_df['Importance'] >= importance_threshold]
 
-        print(f"✅ Top Features for {spread} Spread:")
-        print(feature_importance_df.head(20))
+        # Compute correlation matrix
+        selected_features = feature_importance_df['Feature'].tolist()
+        if len(selected_features) > 1:
+            corr_matrix = X[selected_features].corr().abs()
+        else:
+            corr_matrix = None
 
-        # Plot SHAP Feature Importance
-        plt.figure(figsize=(10, 5))
-        shap.summary_plot(shap_values, X_test, show=False)
-        plt.title(f"SHAP Feature Importance for {spread} Spread")
-        plt.show()
+        # Find and remove highly correlated features
+        to_remove = set()
+        if corr_matrix is not None:
+            for i in range(len(selected_features)):
+                for j in range(i + 1, len(selected_features)):
+                    if corr_matrix.iloc[i, j] > corr_threshold:
+                        # Drop the feature with the lower importance score
+                        if feature_importance_df.loc[feature_importance_df['Feature'] == selected_features[i], 'Importance'].values[0] < \
+                           feature_importance_df.loc[feature_importance_df['Feature'] == selected_features[j], 'Importance'].values[0]:
+                            to_remove.add(selected_features[i])
+                        else:
+                            to_remove.add(selected_features[j])
+
+        # Remove selected features
+        refined_features = feature_importance_df[~feature_importance_df['Feature'].isin(to_remove)]
+
+        # Store in dictionary
+        important_features_dict[spread] = refined_features['Feature'].tolist()
+
+        # print(f"✅ Top Features for {spread} Spread (After Correlation Filtering):")
+        # print(refined_features)
 
     return important_features_dict
 
 
-def prepare_model_data(macro_df, spreads_df):
+def generate_feature_selection_dict(spreads_df, macro_df, corr_threshold=0.8, importance_threshold=0.03):
+    print("\n=== Generating Feature Selection Dictionary ===")
+
+    feature_selection_dict = {spread: set() for spread in ['1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8']}
+    spreads_df_feat = pd.merge(spreads_df, macro_df, how='left', left_index=True, right_index=True)
+
+    # Get unique non-NaN Macro_Regimes
+    macro_regimes = [c for c in spreads_df_feat['Macro_Regime'].unique() if not math.isnan(c)]
+
+    # Track progress using tqdm
+    for clust in tqdm(macro_regimes, desc="Processing features for Macro Regimes"):
+        # print(f"\n🔍 Evaluating Feature Importance for Macro Regime: {clust}")
+
+        cluster_df = spreads_df_feat[spreads_df_feat['Macro_Regime'] == clust]
+        important_features = evaluate_feature_importance(cluster_df, corr_threshold, importance_threshold)
+
+        for spread, features in important_features.items():
+            feature_selection_dict[spread].update(features)
+
+    feature_selection_dict = {spread: list(features) for spread, features in feature_selection_dict.items()}
+
+    print("\n✅ Final Feature Selection Dictionary:")
+    for spread, features in feature_selection_dict.items():
+        print(f"{spread}: {features}")
+
+    return feature_selection_dict
+
+
+def prepare_model_data(macro_df, spreads_df, optimal_features):
     print("=== Preparing Model Data ===")
 
     if spreads_df.index.name == 'Trade_Date': spreads_df = spreads_df.reset_index()
     macro_df.index.name = 'Trade_Date'
     if macro_df.index.name == 'Trade_Date': macro_df = macro_df.reset_index()
 
-    # Check columns before melting
-    print(f"✅ Columns in spreads_df BEFORE melt: {spreads_df.columns}")
-    print(f"✅ Columns in macro_df: {macro_df.columns}")
-
-    # Melt spread features into long format
+    # Melt spread values into long format
     spreads_df_long = spreads_df.melt(
-        id_vars=['Trade_Date', 'DTR', 'DFR'],  # Keep trade date, days-to-roll, and days-from-roll
-        value_vars=['1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8'],
+        id_vars=['Trade_Date', 'DTR', 'DFR', 'day_of_week', 'day_of_month', 'month'],  # Retain key columns
+        value_vars=optimal_features.keys(),  # Use only spreads in optimal_features
         var_name='Spread_ID',
         value_name='Spread_Value'
     )
 
-    # Melt spread-specific technical indicators (mean, std, z-score, RSI, Bollinger Bands, etc.)
-    spread_features = [col for col in spreads_df.columns if
-                       any(f"{s}_" in col for s in ['1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8'])]
-    print("Spread features: ",spread_features)
-
+    # Filter spread features dynamically based on optimal_features
     feature_dfs = []
-    for feature in tqdm(spread_features, desc="Processing Spread Features"):
-        temp_df = spreads_df.melt(
+    for spread, features in optimal_features.items():
+        selected_features = [f for f in features if f in spreads_df.columns]  # Ensure features exist
+        if not selected_features:
+            continue  # Skip if no valid features for this spread
+
+        temp_df = spreads_df[['Trade_Date'] + selected_features].melt(
             id_vars=['Trade_Date'],
-            value_vars=[feature],
-            var_name='Spread_ID',
-            value_name=feature
+            value_vars=selected_features,
+            var_name='Feature_Name',
+            value_name='Feature_Value'
         )
+        temp_df['Spread_ID'] = spread  # Assign corresponding spread
+
         feature_dfs.append(temp_df)
 
-    # Merge all melted feature DataFrames
-    spread_features_long = feature_dfs[0]
-    for df in tqdm(feature_dfs[1:], desc="Merging Spread Feature DataFrames"):
-        spread_features_long = spread_features_long.merge(df, on=['Trade_Date', 'Spread_ID'], how='left')
+    # Merge all feature DataFrames into one long-form DataFrame
+    if feature_dfs:
+        spread_features_long = pd.concat(feature_dfs, ignore_index=True)
+    else:
+        raise ValueError("No valid spread features found for any spread in optimal_features!")
 
-    # Merge macro data into the spread dataset
+    # Merge spreads, features, and macro data
     final_df = spreads_df_long.merge(spread_features_long, on=['Trade_Date', 'Spread_ID'], how='left')
     final_df = final_df.merge(macro_df, on='Trade_Date', how='left')
 
-    # Check final dataset
-    print(f"✅ Columns in spreads_df_long AFTER melt: {spreads_df_long.columns}")
-    print(f"✅ Columns in final_df AFTER merging macro: {final_df.columns}")
-
+    final_df.sort_values(by=['Trade_Date', 'Spread_ID', 'Feature_Name'], inplace=True)
     return final_df
+
 
 
 def main():
     (macro_df,
      # spx_options_df,
      vix_futures_df, vix_spreads_df) = load_data()
+
     utils.make_dir('data/features')
 
     macro_cols = [
         '10Y_chg','VIX_pct_chg','SP500_pct_chg','2s10s','BTC_pct_chg'
     ]
-    macro_df = compute_macro_features(macro_df, macro_cols)
-    print(list(macro_df.columns))
-    # print(macro_df.tail(5))
+    macro_df = compute_macro_features(macro_df, macro_cols).dropna()
     macro_df.to_parquet('data/features/macro_features.parquet')
 
     spreads_df = compute_spread_features(vix_spreads_df)
@@ -322,22 +385,20 @@ def main():
     roll_days = vix_futures_df[['Trade_Date','DTR','DFR']].drop_duplicates()
     roll_days.set_index('Trade_Date', inplace=True)
     spreads_df = pd.merge(spreads_df, roll_days, how='left', left_index=True, right_index=True)
-    # print(list(spreads_df.columns))
 
-    important_features = evaluate_feature_importance(spreads_df)
-    for key in important_features.keys():
-        print(key, important_features[key])
+    optimal_features = generate_feature_selection_dict(spreads_df, macro_df, corr_threshold=0.9, importance_threshold=0.02)
+    for key in optimal_features.keys():
+        print(f"{key} in spreads_df.columns: {key in spreads_df.columns}")
 
     # print(spreads_df.tail(5))
     spreads_df.to_parquet('data/features/spread_features.parquet')
 
     print("\n=== Data Preprocessing Complete ===")
 
-    final_df = prepare_model_data(macro_df, spreads_df)
-    print(final_df.tail(3))
-    # utils.pdf(final_df.tail(3))
+    final_df = prepare_model_data(macro_df, spreads_df, optimal_features)
+    utils.pdf(final_df.tail(75))
 
-    final_df.to_csv('data/features/final_df.csv')
+    final_df.to_csv('data/features/final_df.parquet')
 
 if __name__ == "__main__":
     main()
