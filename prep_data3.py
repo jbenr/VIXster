@@ -163,14 +163,12 @@ def compute_macro_features(macro_df, cols):
     # print(f"Optimal number of macro clusters: {best_k}")
     optimal_clusters = find_optimal_gmm_clusters(macro_scaled)
     clustered_df = cluster_macro_gmm(macro_scaled, optimal_clusters)
-    print(clustered_df)
-
     macro_df.loc[macro_df.dropna().index, 'Macro_Regime'] = clustered_df
 
     cluster_counts = macro_df['Macro_Regime'].value_counts(normalize=True) * 100
     cluster_summary = macro_df[cols + moar + ['Macro_Regime']].groupby('Macro_Regime').mean()
     cluster_summary['Cluster_Percentage'] = cluster_summary.index.map(cluster_counts)
-    print(cluster_summary)
+    utils.pdf(cluster_summary)
 
     print("=== Macro Features Computed ===")
     return macro_df.dropna()[cols + moar + ['Macro_Regime']]
@@ -395,10 +393,10 @@ def main():
 
     print("\n=== Data Preprocessing Complete ===")
 
-    final_df = prepare_model_data(macro_df, spreads_df, optimal_features)
-    utils.pdf(final_df.tail(75))
+    final_df = prepare_model_data(macro_df, spreads_df, optimal_features).dropna()
+    utils.pdf(final_df.head(20))
 
-    final_df.to_csv('data/features/final_df.parquet')
+    final_df.to_parquet('data/features/final_df.parquet')
 
 if __name__ == "__main__":
     main()
