@@ -40,18 +40,17 @@ def load_data():
     # utils.pdf(spx_options_df.tail(10))
     # utils.pdf(macro_data.tail(10))
     # print(spx_options_df.columns)
-    utils.pdf(vix_futures_df.tail(10))
+    # utils.pdf(vix_futures_df.tail(10))
     # utils.pdf(vix_spreads.tail(10))
 
-    fut_feats = vix_futures_df[['Trade_Date','DTR','DFR']]
+    fut_feats = vix_futures_df[['Trade_Date','DTR','DFR']].drop_duplicates()
     fut_feats.set_index('Trade_Date', inplace=True)
-    fut_feats.drop_duplicates(inplace=True)
 
     df = pd.merge(vix_spreads, macro_data, left_index=True, right_index=True)
     df = pd.merge(df, fut_feats, left_index=True, right_index=True)
-    utils.pdf(df.tail(10))
+    # utils.pdf(df.tail(3))
 
-    print("\n=== Data Loaded & Dates Parsed ===")
+    print("=== Data Loaded & Dates Parsed ===\n")
 
     return df
 
@@ -89,17 +88,20 @@ from sklearn.cluster import KMeans
 def cluster_regimes(data, n_clusters=4, cluster_features=['VIX', 'SP500_drawdown', 'IG']):
     X_cluster = StandardScaler().fit_transform(data[cluster_features])  # Standardize
 
-    # Apply KMeans clustering
     kmeans = KMeans(n_clusters=n_clusters, random_state=0)
     data['ClusterRegime'] = kmeans.fit_predict(X_cluster)
 
-    # Compute cluster percentages
-    cluster_counts = data['ClusterRegime'].value_counts(normalize=True) * 100  # Convert to %
-    data['ClusterPercentage'] = data['ClusterRegime'].map(cluster_counts)
+    cluster_counts = data['ClusterRegime'].value_counts()  # Number of samples per cluster
+    cluster_percentages = (cluster_counts / len(data)) * 100  # Convert to percentage
 
-    # Interpret clusters by looking at average feature values
-    cluster_means = data.groupby('ClusterRegime')[cluster_features+['ClusterPercentage']].mean()
-    utils.pdf(cluster_means.round(3))
+    data['ClusterPercentage'] = data['ClusterRegime'].map(cluster_percentages)
+
+    cluster_means = data.groupby('ClusterRegime')[cluster_features].mean()
+
+    cluster_summary = cluster_means.copy()
+    cluster_summary['SampleCount'] = cluster_counts
+    cluster_summary['ClusterPercentage'] = cluster_percentages.map(lambda x: f"{x:.1f}%")
+    utils.pdf(cluster_summary.round(3))
 
     return data
 
