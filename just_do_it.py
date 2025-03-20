@@ -50,9 +50,8 @@ def lin_regresh(df, feature_cols=['VIX', '1-2', '2-3']):
         metrics = perf_eval(actuals, preds)
         print(f"Spread {spread} - MAE: {metrics['MAE']:.5f} | R²: {metrics['R²']:.5f} | IC: {metrics['IC']:.5f} | Directional Acc: {metrics['Directional Acc']:.2%}")
 
-
     coef_df = pd.DataFrame(model.coef_, columns=feature_cols, index=target_cols)
-    print('\n== Coefficient importance ==')
+    print('== Coefficient importance ==')
     utils.pdf(coef_df.round(3))
     return model, spread_results
 

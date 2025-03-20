@@ -8,13 +8,18 @@ from prep_data_2 import *
 if __name__ == '__main__':
     df = load_data()
     data = feature_engineer(df)
-    # utils.pdf(data.tail(5))
+    utils.pdf(data.tail(5))
 
-    cluster_features = ['VIX', 'SP500_5d', 'SP500_drawdown', 'IG']
+    cluster_features = [
+        'VIX',
+        'SP500_realized_vol_21d',
+        'SP500_1d', 'SP500_5d',
+        'SP500_drawdown'
+    ]
     clust = cluster_regimes(data, n_clusters=8, cluster_features=cluster_features)
 
     feature_cols = [
-        'VIX', '5YBEI',
+        'VIX', 'DFR',
         'SP500_realized_vol_21d',
         'SP500_1d', 'SP500_5d',
         'SP500_drawdown'
@@ -24,8 +29,9 @@ if __name__ == '__main__':
 
     # evaluating performance by cluster!
     for spread in list(preds.keys()):
-        print(f"\n== Spread {spread} ==")
         spr = preds[spread]
+        metrics = perf_eval(spr['Actual'], spr['Pred'])
+        print(f"\n== Spread {spread} == MAE: {metrics['MAE']:.5f} | R²: {metrics['R²']:.5f} | IC: {metrics['IC']:.5f} | Directional Acc: {metrics['Directional Acc']:.2%}")
         clusts = clust['ClusterRegime'].unique()
         clusts.sort()
         for cluster in clusts:
