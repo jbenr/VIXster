@@ -40,10 +40,12 @@ def run():
         '10Y': 'DGS10',  # Interest rate yield example
         '30Y': 'DGS30',
         '5YBEI': 'T5YIE',
-        'USD': 'DTWEXAFEGS',
+        # 'USD': 'DTWEXAFEGS',
         'VIX': 'VIXCLS',  # VIX index
         'SP500': 'SP500',  # S&P 500 price index
-        'BTC': 'CBBTCUSD'
+        'BTC': 'CBBTCUSD',
+        'HY': 'BAMLH0A0HYM2',
+        'IG': 'BAMLC0A0CM'
     }
 
     dataframes = []

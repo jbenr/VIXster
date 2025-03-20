@@ -1,106 +1,112 @@
-import xgboost as xgb
-from xgboost import plot_importance
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, mean_squared_error
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import vixy
 import utils
+
+def load_data():
+    print("\n=== Loading Data ===")
+
+    macro_data = pd.read_parquet('data/fred.parquet').dropna()
+    print(f"Pulled fred data. shape: {macro_data.shape}")
+    macro_data.index = pd.to_datetime(macro_data.index).date
+
+    # spx_options_df = pd.read_parquet("data/spx_options.parquet")
+    # print(f"Pulled SPX options data. shape: {spx_options_df.shape}")
+    # spx_options_df["QUOTE_DATE"] = pd.to_datetime(spx_options_df["QUOTE_DATE"]).dt.date
+    # spx_options_df["EXPIRE_DATE"] = pd.to_datetime(spx_options_df["EXPIRE_DATE"]).dt.date
+
+    vix_futures_df = pd.read_parquet("data/vix.parquet")
+    print(f"Pulled VIX futures data. shape: {vix_futures_df.shape}")
+    vix_futures_df["Trade_Date"] = pd.to_datetime(vix_futures_df["Trade_Date"]).dt.date
+
+    vix_spreads = pd.read_parquet("data/vix_spreads.parquet")[
+        ['1-2','2-3','3-4','4-5','5-6','6-7','7-8']
+    ]
+    print(f"Pulled VIX spreads data. shape: {vix_spreads.shape}")
+
+    # common_trade_dates = sorted(set(spx_options_df["QUOTE_DATE"])
+    #                             .intersection(vix_spreads.index)
+    #                             .intersection(vix_futures_df['Trade_Date'])
+    #                             .intersection(macro_data.index))
+    common_trade_dates = sorted(set(vix_spreads.index)
+                                .intersection(vix_futures_df['Trade_Date'])
+                                .intersection(macro_data.index))
+    print(f"Filtered to first {len(common_trade_dates)} common trade dates")
+
+    macro_data = macro_data.loc[common_trade_dates]
+    # spx_options_df = spx_options_df[spx_options_df["QUOTE_DATE"].isin(common_trade_dates)]
+    vix_futures_df = vix_futures_df[vix_futures_df["Trade_Date"].isin(common_trade_dates)]
+    vix_spreads = vix_spreads.loc[common_trade_dates]
+
+    # utils.pdf(spx_options_df.tail(10))
+    # utils.pdf(macro_data.tail(10))
+    # print(spx_options_df.columns)
+    utils.pdf(vix_futures_df.tail(10))
+    # utils.pdf(vix_spreads.tail(10))
+
+    fut_feats = vix_futures_df[['Trade_Date','DTR','DFR']]
+    fut_feats.set_index('Trade_Date', inplace=True)
+    fut_feats.drop_duplicates(inplace=True)
+
+    df = pd.merge(vix_spreads, macro_data, left_index=True, right_index=True)
+    df = pd.merge(df, fut_feats, left_index=True, right_index=True)
+    utils.pdf(df.tail(10))
+
+    print("\n=== Data Loaded & Dates Parsed ===")
+
+    return df
+
+
 import talib
 
-def prep_X_y(params):
-    y = vixy.process_vix()
-    y = vixy.pivot_vix(y)
-    y.index = pd.to_datetime(y.index).date
+def feature_engineer(df):
+    data = df.copy()
+    data.index = pd.to_datetime(data.index)
 
-    X = y[['DTR', 'DFR']]
-    y = vixy.vix_spreads(y)
-    y = y[['1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8']]
+    data['SP500_5d'] = data['SP500'].pct_change(5)
+    data['SP500_1d'] = data['SP500'].pct_change(1)
+    data['SP500_peak'] = data['SP500'].cummax()
+    data['SP500_drawdown'] = (data['SP500_peak'] - data['SP500']) / data['SP500']  # drawdown from peak
 
-    fred = pd.read_parquet('data/fred.parquet')
-    fred.index = pd.to_datetime(fred.index).date
-    fred.index.name = 'Trade_Date'
+    data['Month'] = data.index.month
+    month_dummies = pd.get_dummies(data['Month'], prefix='Month', drop_first=True)
+    data = pd.concat([data.drop('Month', axis=1), month_dummies], axis=1)
 
-    stonk = fred[['VIX', 'SP500', '10Y']].copy()
-    for col in ['VIX', '10Y']: stonk[f'{col}_chg'] = fred[col].diff()
-    for col in ['SP500']: stonk[f'{col}_pct_chg'] = fred[col].pct_change(fill_method=None)
+    def realized_volatility(data, column='SP500', window=21):
+        log_returns = np.log(data[column] / data[column].shift(1))  # Calculate log returns
+        realized_vol = log_returns.rolling(window=window).std() * np.sqrt(252)  # Apply formula
+        return realized_vol
 
-    shared_indexes = X.index.intersection(stonk.index)
-    stonk = stonk.loc[shared_indexes]
+    vol_period = 21
+    data[f'SP500_realized_vol_{vol_period}d'] = realized_volatility(data, column='SP500', window=vol_period)
 
-    X = pd.merge(X, stonk, how='left', left_index=True, right_index=True).dropna()
-    shared_indexes = X.index.intersection(y.index)
-
-    X = X.loc[shared_indexes]
-    y = y.loc[shared_indexes]
-
-    bb_period = params.get("BB_period", 14)
-    rsi_period = params.get("RSI_period", 14)
-
-    dic_dat = {} # generate technical indicators for each spread
-    for col in y.columns:
-        tech = y[[col]].copy()
-
-        tech[f'Upper_BB_{bb_period}'], tech[f'Middle_BB_{bb_period}'], tech[f'Lower_BB_{bb_period}'] = talib.BBANDS(
-            tech[col], timeperiod=bb_period, nbdevup=2, nbdevdn=2, matype=0)
-        tech[f'RSI_{rsi_period}'] = talib.RSI(tech[col], rsi_period)-50
-
-        tech.drop(columns=col,inplace=True)
-        dic_dat[col] = tech.dropna()
-
-    shared_indexes = dic_dat[y.columns[0]].index.intersection(X.index)
-    X = X.loc[shared_indexes]
-    y = y.loc[shared_indexes]
-
-    return X, y, dic_dat
+    data.dropna(inplace=True)
+    return data
 
 
-X, y, dat = prep_X_y({'BB_period': 14, 'RSI_period': 14})
-utils.pdf(X.tail(10))
-utils.pdf(y.tail(10))
-print(dat.keys())
-for key in dat.keys():
-    print(key)
-    utils.pdf(dat[key].tail(10))
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+
+def cluster_regimes(data, n_clusters=4, cluster_features=['VIX', 'SP500_drawdown', 'IG']):
+    X_cluster = StandardScaler().fit_transform(data[cluster_features])  # Standardize
+
+    # Apply KMeans clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+    data['ClusterRegime'] = kmeans.fit_predict(X_cluster)
+
+    # Compute cluster percentages
+    cluster_counts = data['ClusterRegime'].value_counts(normalize=True) * 100  # Convert to %
+    data['ClusterPercentage'] = data['ClusterRegime'].map(cluster_counts)
+
+    # Interpret clusters by looking at average feature values
+    cluster_means = data.groupby('ClusterRegime')[cluster_features+['ClusterPercentage']].mean()
+    utils.pdf(cluster_means.round(3))
+
+    return data
 
 
-def feat_imp(X, y):
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    model = xgb.XGBRegressor()
-    model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
-    mse = mean_squared_error(y_test, y_pred)
-    print(f"Mean Squared Error: {mse:.4f}")
-
-    plot_importance(model)
-    plt.show()
-
-    importance_scores = model.feature_importances_
-    for i, v in enumerate(importance_scores):
-        print(f'Feature: {X.columns[i]}, Score: {v}')
-
-# for col in y.columns:
-#     print(col)
-#     feat_imp(X, y[col])
-#     print('\n')
-
-
-from statsmodels.stats.outliers_influence import variance_inflation_factor
-def calculate_vif(X):
-    # Ensure no NaN or Inf values in X
-    X_clean = X.replace([np.inf, -np.inf], np.nan)
-    X_clean = X_clean.fillna(X_clean.mean())
-
-    vif_data = pd.DataFrame()
-    vif_data["Feature"] = X_clean.columns
-    vif_data["VIF"] = [variance_inflation_factor(X_clean.values, i) for i in range(X_clean.shape[1])]
-
-    return vif_data
-
-vif_df = calculate_vif(X)
-print(vif_df)
-
-
+if __name__ == "__main__":
+    df = load_data()
+    data = feature_engineer(df)
+    utils.pdf(data.tail(5))
+    cluster_features = ['VIX', 'SP500_5d', 'SP500_drawdown', 'IG']
+    cluster_regimes(data, n_clusters=7, cluster_features=cluster_features)
