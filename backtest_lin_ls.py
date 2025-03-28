@@ -59,13 +59,15 @@ def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_t
         long_spread = max(zscores, key=zscores.get)
         short_spread = min(zscores, key=zscores.get)
 
+        entry_block = row_today.get("DTR", 1) != 0 and row_today.get("DFR", 1) != 0
+
         if current_position:
             current_long, current_short = current_position
             if roll_detected or zscores[current_long] < exit_z_thresh or zscores[current_short] > -exit_z_thresh:
                 current_position = None
                 current_weights = (0.5, 0.5)
 
-        if not current_position and zscores[long_spread] >= z_thresh and zscores[short_spread] <= -z_thresh:
+        if not current_position and zscores[long_spread] >= z_thresh and zscores[short_spread] <= -z_thresh and entry_block:
             current_position = (long_spread, short_spread)
             vol_long = vols[long_spread]
             vol_short = vols[short_spread]
@@ -124,6 +126,7 @@ def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_t
 
 
 
+
 def evaluate_performance(df):
     daily_returns = df["DailyPnL"]
     cum_pnl = df["CumulativePnL"]
@@ -144,12 +147,19 @@ def evaluate_performance(df):
     max_drawdown = drawdown.min()
     calmar_ratio = annual_return / abs(max_drawdown) if max_drawdown != 0 else np.nan
 
-    # Trade-based win rate
     trade_pnl = df[df["Trade"]].groupby("TradeID")["TradeCumulativePnL"].last()
     trade_pnl = trade_pnl[trade_pnl.index != 0]
     num_trades = len(trade_pnl)
     num_wins = (trade_pnl > 0).sum()
     win_rate = num_wins / num_trades if num_trades > 0 else np.nan
+
+    avg_win = trade_pnl[trade_pnl > 0].mean() if num_wins > 0 else np.nan
+    avg_loss = trade_pnl[trade_pnl <= 0].mean() if num_wins < num_trades else np.nan
+    max_win = trade_pnl.max() if num_trades > 0 else np.nan
+    max_loss = trade_pnl.min() if num_trades > 0 else np.nan
+
+    trade_durations = df[df["Trade"]].groupby("TradeID").size()
+    avg_trade_duration = trade_durations.mean() if num_trades > 0 else np.nan
 
     print("\n📊 Strategy Performance Summary")
     print("-" * 50)
@@ -162,6 +172,11 @@ def evaluate_performance(df):
     print(f"Calmar Ratio          : {calmar_ratio:.4f}")
     print(f"Win Rate (Trades)     : {win_rate:.2%}")
     print(f"Number of Trades      : {num_trades}")
+    print(f"Avg Trade Duration    : {avg_trade_duration:.2f} days")
+    print(f"Avg Win per Trade     : {avg_win:.4f}")
+    print(f"Avg Loss per Trade    : {avg_loss:.4f}")
+    print(f"Max Win per Trade     : {max_win:.4f}")
+    print(f"Max Loss per Trade    : {max_loss:.4f}")
     print("-" * 50)
 
     return {
@@ -173,7 +188,12 @@ def evaluate_performance(df):
         "MaxDrawdown": max_drawdown,
         "CalmarRatio": calmar_ratio,
         "WinRate": win_rate,
-        "NumTrades": num_trades
+        "NumTrades": num_trades,
+        "AvgTradeDuration": avg_trade_duration,
+        "AvgWin": avg_win,
+        "AvgLoss": avg_loss,
+        "MaxWin": max_win,
+        "MaxLoss": max_loss
     }
 
 
@@ -189,7 +209,7 @@ def main():
     print("=== Loading Data ===")
     df = load_data()
     df_data = feature_engineer(df)
-    target_spreads = [f"{i}-{i+1}" for i in range(1, 8)]
+    target_spreads = [f"{i}-{i+1}" for i in range(1, 8)][2:]
 
     model_paths = {
         spread: f"data/models/linear_model_{spread}.pkl"
@@ -208,12 +228,11 @@ def main():
     models = load_models(model_paths)
     df_preds = generate_all_predictions(models, df_data, feature_cols_dict)
     df_result = ranked_strategy_vol_adjusted(
-        df_preds, target_spreads, vol_lookback=150, z_thresh=1.0, exit_z_thresh=0.5)
+        df_preds, target_spreads, vol_lookback=20, z_thresh=1.0, exit_z_thresh=0.25)
 
     utils.make_dir("data/backtest_ranked")
     df_result.to_parquet("data/backtest_ranked/pnl_timeseries.parquet")
-    utils.pdf(df_result.tail(30))
-    utils.pdf(df_preds.tail(10))
+    utils.pdf(df_result[(df_result.index.year==2020)&(df_result.index.month==3)])
 
     performance = evaluate_performance(df_result)
     plot_pnl(df_result)
