@@ -178,8 +178,8 @@ def interpolate_missing_and_zero_vix(df_, exclude_columns=None):
 
 
 def pivot_vix(df):
-    pivot_df = df.pivot_table(index='Trade_Date', columns='Calendar_Num', values='Close', aggfunc='first')
-    pivot_df.columns = [f"{col}_Close" for col in pivot_df.columns]
+    pivot_df = df.pivot_table(index='Trade_Date', columns='Calendar_Num', values='Settle', aggfunc='first')
+    pivot_df.columns = [f"{col}_Settle" for col in pivot_df.columns]
 
     df_ = df[['Trade_Date','DTR','DFR']]
     df_ = df_.drop_duplicates()
@@ -188,8 +188,8 @@ def pivot_vix(df):
     pivot_df = pd.merge(pivot_df, df_, how='left', left_index=True, right_index=True)
     pivot_df.reset_index(inplace=True)
     pivot_df = pivot_df[[
-        'Trade_Date', '1.0_Close', '2.0_Close', '3.0_Close',
-        '4.0_Close', '5.0_Close', '6.0_Close', '7.0_Close', '8.0_Close',
+        'Trade_Date', '1.0_Settle', '2.0_Settle', '3.0_Settle',
+        '4.0_Settle', '5.0_Settle', '6.0_Settle', '7.0_Settle', '8.0_Settle',
         'DTR', 'DFR'
     ]].set_index('Trade_Date')
 
@@ -202,9 +202,9 @@ def pivot_vix(df):
 
 def vix_spreads(pivot_df):
     df = pd.DataFrame(index=pivot_df.index)
-    for i in range(1, len([i for i in pivot_df.columns if 'Close' in i])+1):
-        for j in range(i + 1, len([i for i in pivot_df.columns if 'Close' in i])+1):
-            df[f'{i}-{j}'] =  pivot_df[f'{j}.0_Close'] - pivot_df[f'{i}.0_Close']
+    for i in range(1, len([i for i in pivot_df.columns if 'Settle' in i])+1):
+        for j in range(i + 1, len([i for i in pivot_df.columns if 'Settle' in i])+1):
+            df[f'{i}-{j}'] =  pivot_df[f'{j}.0_Settle'] - pivot_df[f'{i}.0_Settle']
     # df.to_parquet(utils.get_abs_path('data/vix_spreads.parquet'))
     return df
 
@@ -214,7 +214,7 @@ def vix_active_contracts():
     lst = []
     for i in vix_contracts:
         lst.append(pd.read_parquet(i))
-    vix_contracts = pd.concat(lst).pivot(columns='Futures', index='Trade Date', values='Close')
+    vix_contracts = pd.concat(lst).pivot(columns='Futures', index='Trade Date', values='Settle')
 
     def convert_column_name(column_name):
         year = column_name.split()[-1][:-1]
@@ -266,7 +266,7 @@ def rt_vix_cleaner(df_):
     df['DTR'] = df.apply(lambda row: calculate_dtr(row, df['Expiration']), axis=1)
 
     df = df[['date','close','LocalSymbol','Expiration','Calendar_Num','DTR','DFR']]
-    df.rename(columns={'date':'Trade_Date','close':'Close','Expiration':'Expiry'},inplace=True)
+    df.rename(columns={'date':'Trade_Date','close':'Settle','Expiration':'Expiry'},inplace=True)
 
     return df
 

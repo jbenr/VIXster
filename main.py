@@ -1,8 +1,10 @@
 import pandas as pd
+import pickle
 
 from just_do_it import *
 from just_do_it import perf_eval
 from prep_data_2 import *
+from single_regresh import train_and_evaluate_cv
 
 
 if __name__ == '__main__':
@@ -16,30 +18,51 @@ if __name__ == '__main__':
         'SP500_1d', 'SP500_5d',
         'SP500_drawdown'
     ]
-    clust = cluster_regimes(data, n_clusters=8, cluster_features=cluster_features)
+    clust = cluster_regimes(data, n_clusters=5, cluster_features=cluster_features)
 
     feature_cols = [
         'VIX', 'DFR',
-        'SP500_realized_vol_21d',
+        'SP500_realized_vol_7d', 'SP500_realized_vol_14d',
+        'SP500_realized_vol_21d', 'SP500_realized_vol_50d',
         'SP500_1d', 'SP500_5d',
         'SP500_drawdown'
     ] + [col for col in data.columns if col.startswith("Month_")]
 
-    lin_model, preds = lin_regresh(data, feature_cols=feature_cols)
+    base_feats = [
+        'VIX', 'DFR',
+        'SP500_realized_vol_7d',
+        'SP500_realized_vol_21d', 'SP500_realized_vol_50d',
+        'SP500_1d', 'SP500_5d',
+        'SP500_drawdown',
+        '1-2','2-3','3-4','4-5','5-6','6-7','7-8'  # i.e. you can put other spreads here
+    ]
 
-    # evaluating performance by cluster!
-    for spread in list(preds.keys()):
-        spr = preds[spread]
-        metrics = perf_eval(spr['Actual'], spr['Pred'])
-        print(f"\n== Spread {spread} == MAE: {metrics['MAE']:.5f} | R²: {metrics['R²']:.5f} | IC: {metrics['IC']:.5f} | Directional Acc: {metrics['Directional Acc']:.2%}")
-        clusts = clust['ClusterRegime'].unique()
-        clusts.sort()
-        for cluster in clusts:
-            temp = spr.loc[spr.index.isin(clust[clust['ClusterRegime'] == cluster].index)]
-            try:
-                metrics = perf_eval(temp['Actual'], temp['Pred'])
-                print(f"Cluster {cluster} [{len(temp)} samples] - MAE: {metrics['MAE']:.5f} | R²: {metrics['R²']:.5f} | IC: {metrics['IC']:.5f} | Directional Acc: {metrics['Directional Acc']:.2%}")
-            except Exception as e: print(e)
+    # The target spreads we want to model individually
+    target_spreads = [f"{i}-{i+1}" for i in range(1,8)]
+    utils.make_dir('data/models')
+    best_feats = pd.read_parquet('data/optimal_models.parquet')
+    for spread in list(best_feats['Spread'].unique()):
+        cols = best_feats[best_feats['Spread']==spread].loc[
+            best_feats[best_feats['Spread']==spread]['DirectionalAcc'].idxmax()
+        ]['SubsetBlocks']
+        print(f"{spread} {list(cols)}")
 
-    print('\n== Preds ==')
-    utils.pdf(preds[list(preds.keys())[0]].head(3))
+        metrics, final_model = train_and_evaluate_cv(
+            df=data, spread=spread, active_blocks=cols,
+            month_cols=[c for c in data.columns if c.startswith('Month_')],
+            n_splits=5
+        )
+        with open(f"data/models/linear_model_{spread}.pkl", "wb") as f:
+            pickle.dump(final_model, f)
+        print(f"Saved {spread} linear model.")
+
+    for spread in list(best_feats['Spread'].unique()):
+        print(spread)
+        pred = pd.read_parquet(f'data/backtest/backtest_lin_merged_{spread}.parquet')
+        pred = pred[[spread,'PredictedSpread','SpreadResid',"SpreadVol","Zscore",'Position','DailyPnL','CumulativePnL','ClusterRegime']]
+        # pred = pred[pred.index.month == 3]
+        # pred = pred[pred.index.year == 2025]
+        # utils.pdf(pred.tail(10))
+        pred['DailyPnL_Adj'] = pred['DailyPnL'].shift(-1)
+        pred.dropna(inplace=True)
+        utils.pdf(pred[pred['Position']!=0].groupby(['ClusterRegime']).agg({'DailyPnL_Adj':['mean','var','median','max','min','count']}))

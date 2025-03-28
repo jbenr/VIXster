@@ -75,8 +75,8 @@ def feature_engineer(df):
         realized_vol = log_returns.rolling(window=window).std() * np.sqrt(252)  # Apply formula
         return realized_vol
 
-    vol_period = 21
-    data[f'SP500_realized_vol_{vol_period}d'] = realized_volatility(data, column='SP500', window=vol_period)
+    for vol_period in [7,14,21,50]:
+        data[f'SP500_realized_vol_{vol_period}d'] = realized_volatility(data, column='SP500', window=vol_period)
 
     data.dropna(inplace=True)
     return data
