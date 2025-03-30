@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from tabulate import tabulate, tabulate_formats
 from dotenv import load_dotenv
+import subprocess
 
 load_dotenv()
 AWS_ACCESS = os.getenv("AWS_ACCESS_KEY")
@@ -46,11 +47,10 @@ def find_project_root(project_name):
     return None
 
 
-def get_project_root():
+def get_project_root(project_name='algotrader'):
     """
     Get the root directory of the current project.
     """
-    project_name = "algotrader"
     return find_project_root(project_name)
 
 
@@ -88,8 +88,37 @@ def oh_waiter(secs,desc=""):
     sys.stdout.write(f"\rWaiting 0 seconds... Done {desc}!\n")
 
 
+def find_repo_root():
+    path = Path(__file__).resolve()
+    for parent in path.parents:
+        if (parent / ".git").exists():
+            return str(parent)
+    return None
+
+
+def run_command(command, cwd):
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print(result.stdout)
+    else:
+        print(f"❗️ Error: {result.stderr}")
+
+
+def git_push(commit_message):
+    repo_path = find_repo_root()
+    if not repo_path:
+        print("❗️ No Git repository found!")
+        return
+
+    print(f"📂 Repo path detected: {repo_path}")
+
+    run_command(["git", "add", "."], cwd=repo_path)
+    run_command(["git", "commit", "-m", commit_message], cwd=repo_path)
+    run_command(["git", "push", "origin", "main"], cwd=repo_path)
+
+
 def main():
-    pass
+    git_push("Auto commit 🚀")
 
 
 if __name__ == "__main__":
