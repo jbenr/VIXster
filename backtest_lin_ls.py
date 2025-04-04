@@ -31,14 +31,15 @@ def generate_all_predictions(models, df_data, feature_cols_dict):
     return df_preds
 
 
-def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_thresh=1.0, exit_z_thresh=1.0):
+def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_lookback=20, z_thresh=1.0, exit_z_thresh=1.0):
     df = df_preds.copy()
     df = df.dropna(subset=[f"Pred_{s}" for s in target_spreads] + target_spreads)
     df.sort_index(inplace=True)
 
     for s in target_spreads:
         df[f"Vol_{s}"] = df[s].diff().rolling(window=vol_lookback).std()
-        df[f"Z_{s}"] = (df[f"Pred_{s}"] - df[s]) / df[f"Vol_{s}"]
+        df[f"Vol_z_{s}"] = df[s].diff().rolling(window=z_lookback).std()
+        df[f"Z_{s}"] = (df[f"Pred_{s}"] - df[s]) / df[f"Vol_z_{s}"]
 
     daily_pnls = []
     trade_log = []
@@ -228,11 +229,12 @@ def main():
     models = load_models(model_paths)
     df_preds = generate_all_predictions(models, df_data, feature_cols_dict)
     df_result = ranked_strategy_vol_adjusted(
-        df_preds, target_spreads, vol_lookback=20, z_thresh=1.0, exit_z_thresh=0.25)
+        df_preds, target_spreads, vol_lookback=60, z_lookback=20, z_thresh=1.0, exit_z_thresh=0.25)
 
     utils.make_dir("data/backtest_ranked")
     df_result.to_parquet("data/backtest_ranked/pnl_timeseries.parquet")
-    utils.pdf(df_result[(df_result.index.year==2020)&(df_result.index.month==3)])
+    # utils.pdf(df_result[(df_result.index.year==2020)&(df_result.index.month==3)])
+    utils.pdf(df_result[df_result.index.year==2025])
 
     performance = evaluate_performance(df_result)
     plot_pnl(df_result)
