@@ -47,9 +47,15 @@ def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_l
     current_position = None
     current_weights = (0.5, 0.5)
 
-    for i in range(len(df) - 1):
+    # for i in range(len(df)-1):
+    #     row_today = df.iloc[i]
+    #     row_next = df.iloc[i + 1]
+    for i in range(len(df)):
         row_today = df.iloc[i]
-        row_next = df.iloc[i + 1]
+        if i == len(df) - 1:
+            row_next = row_today.copy()
+        else:
+            row_next = df.iloc[i + 1]
 
         zscores = {s: row_today[f"Z_{s}"] for s in target_spreads}
         preds = {s: row_today[f"Pred_{s}"] for s in target_spreads}
@@ -124,8 +130,6 @@ def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_l
     df_result["TradeCumulativePnL"] = df_result.groupby("TradeID")["DailyPnL"].cumsum()
 
     return df_result
-
-
 
 
 def evaluate_performance(df):
@@ -208,7 +212,7 @@ def plot_pnl(df):
 
 def main():
     print("=== Loading Data ===")
-    df = load_data()
+    df = load_data(live=True)
     df_data = feature_engineer(df)
     target_spreads = [f"{i}-{i+1}" for i in range(1, 8)][2:]
 
@@ -227,14 +231,16 @@ def main():
     }
 
     models = load_models(model_paths)
+
     df_preds = generate_all_predictions(models, df_data, feature_cols_dict)
     df_result = ranked_strategy_vol_adjusted(
-        df_preds, target_spreads, vol_lookback=60, z_lookback=20, z_thresh=1.0, exit_z_thresh=0.25)
+        df_preds, target_spreads, vol_lookback=60, z_lookback=30, z_thresh=1.0, exit_z_thresh=0.25)
 
     utils.make_dir("data/backtest_ranked")
     df_result.to_parquet("data/backtest_ranked/pnl_timeseries.parquet")
     # utils.pdf(df_result[(df_result.index.year==2020)&(df_result.index.month==3)])
-    utils.pdf(df_result[df_result.index.year==2025])
+    # utils.pdf(df_result[df_result.index.year==2025])
+    utils.pdf(df_result.tail(10))
 
     performance = evaluate_performance(df_result)
     plot_pnl(df_result)

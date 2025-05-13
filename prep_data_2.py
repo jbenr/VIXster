@@ -1,8 +1,10 @@
 import pandas as pd
 import numpy as np
 import utils
+import yahoooo
+from yahoooo import get_price
 
-def load_data():
+def load_data(live=False):
     print("\n=== Loading Data ===")
 
     macro_data = pd.read_parquet('data/fred.parquet').dropna()
@@ -48,7 +50,39 @@ def load_data():
 
     df = pd.merge(vix_spreads, macro_data, left_index=True, right_index=True)
     df = pd.merge(df, fut_feats, left_index=True, right_index=True)
-    # utils.pdf(df.tail(3))
+
+    ### Insert live data logic
+    if live:
+        vx = yahoooo.get_price('^VIX')
+        vx.columns = ['VIX']
+        sp = yahoooo.get_price('^GSPC')
+        sp.columns = ['SP500']
+
+        live_spreads = pd.read_parquet('sheet/spreads.parquet')
+        max_date = live_spreads['Last Update'].max()
+        live_spreads[max_date] = ((live_spreads['Bid Size'] * live_spreads['Bid Price'])\
+        + (live_spreads['Ask Size'] * live_spreads['Ask Price']))\
+        / (live_spreads['Bid Size'] + live_spreads['Ask Size'])
+        live_spreads = live_spreads[['Spread',max_date]].set_index("Spread").T
+        live_spreads.index = pd.to_datetime(live_spreads.index).date
+
+        live_spreads = pd.merge(live_spreads, vx, left_index=True, right_index=True)
+        live_spreads = pd.merge(live_spreads, sp, left_index=True, right_index=True)
+
+        df = df[['1-2','2-3','3-4','4-5','5-6','6-7','7-8','VIX','SP500','DTR','DFR']]
+        df = pd.concat([df,live_spreads])
+
+        new_date = df.index[-1]
+
+        prev_date = df.index[-2]
+        days_diff = (pd.to_datetime(new_date) - pd.to_datetime(prev_date)).days
+
+        df.at[new_date, 'DTR'] = df.at[prev_date, 'DTR'] - days_diff
+        df.at[new_date, 'DFR'] = df.at[prev_date, 'DFR'] + days_diff
+
+        df = df.fillna(0)
+
+    utils.pdf(df.tail(3))
 
     print("=== Data Loaded & Dates Parsed ===\n")
 
@@ -107,8 +141,9 @@ def cluster_regimes(data, n_clusters=4, cluster_features=['VIX', 'SP500_drawdown
 
 
 if __name__ == "__main__":
-    df = load_data()
+    df = load_data(live=True)
     data = feature_engineer(df)
+    # data.to_parquet('data/live_features.parquet')
     utils.pdf(data.tail(5))
-    cluster_features = ['VIX', 'SP500_5d', 'SP500_drawdown', 'IG']
+    cluster_features = ['VIX', 'SP500_5d', 'SP500_drawdown']
     cluster_regimes(data, n_clusters=7, cluster_features=cluster_features)

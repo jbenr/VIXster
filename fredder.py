@@ -35,10 +35,11 @@ def fetch_series_data(series_id, api_key):
 
 def run():
     series_dict = {
-        '2Y': 'DGS2',
-        '5Y': 'DGS5',
-        '10Y': 'DGS10',  # Interest rate yield example
-        '30Y': 'DGS30',
+        # '2Y': 'DGS2',
+        # '5Y': 'DGS5',
+        # '10Y': 'DGS10',  # Interest rate yield example
+        # '30Y': 'DGS30',
+        '2Y10Y': 'T10Y2Y',
         '5YBEI': 'T5YIE',
         # 'USD': 'DTWEXAFEGS',
         'VIX': 'VIXCLS',  # VIX index

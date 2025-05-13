@@ -20,23 +20,6 @@ if __name__ == '__main__':
     ]
     clust = cluster_regimes(data, n_clusters=5, cluster_features=cluster_features)
 
-    feature_cols = [
-        'VIX', 'DFR',
-        'SP500_realized_vol_7d', 'SP500_realized_vol_14d',
-        'SP500_realized_vol_21d', 'SP500_realized_vol_50d',
-        'SP500_1d', 'SP500_5d',
-        'SP500_drawdown'
-    ] + [col for col in data.columns if col.startswith("Month_")]
-
-    base_feats = [
-        'VIX', 'DFR',
-        'SP500_realized_vol_7d',
-        'SP500_realized_vol_21d', 'SP500_realized_vol_50d',
-        'SP500_1d', 'SP500_5d',
-        'SP500_drawdown',
-        '1-2','2-3','3-4','4-5','5-6','6-7','7-8'  # i.e. you can put other spreads here
-    ]
-
     # The target spreads we want to model individually
     target_spreads = [f"{i}-{i+1}" for i in range(1,8)]
     utils.make_dir('data/models')
@@ -56,13 +39,3 @@ if __name__ == '__main__':
             pickle.dump(final_model, f)
         print(f"Saved {spread} linear model.")
 
-    for spread in list(best_feats['Spread'].unique()):
-        print(spread)
-        pred = pd.read_parquet(f'data/backtest/backtest_lin_merged_{spread}.parquet')
-        pred = pred[[spread,'PredictedSpread','SpreadResid',"SpreadVol","Zscore",'Position','DailyPnL','CumulativePnL','ClusterRegime']]
-        # pred = pred[pred.index.month == 3]
-        # pred = pred[pred.index.year == 2025]
-        # utils.pdf(pred.tail(10))
-        pred['DailyPnL_Adj'] = pred['DailyPnL'].shift(-1)
-        pred.dropna(inplace=True)
-        utils.pdf(pred[pred['Position']!=0].groupby(['ClusterRegime']).agg({'DailyPnL_Adj':['mean','var','median','max','min','count']}))

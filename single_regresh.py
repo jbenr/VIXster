@@ -200,22 +200,22 @@ if __name__ == "__main__":
     # The target spreads we want to model individually
     target_spreads = [f"{i}-{i+1}" for i in range(1,8)]
 
-    best_results = all_subsets_feature_selection(
-        df=data,
-        target_cols=target_spreads,
-        base_features=base_feats,
-        include_seasonality=True,
-        parquet_path='data/cv_all_subsets.parquet',
-        n_splits=5,
-        verbose=True
-    )
-
-    # Inspect final best model per spread
-    for spread, info in best_results.items():
-        print(f"\nSpread: {spread}")
-        print("Best Subset:", info['best_subset'])
-        print("Avg CV Metrics:", info['metrics'])
-        # info['model'] is the last fold's model from the CV
+    # best_results = all_subsets_feature_selection(
+    #     df=data,
+    #     target_cols=target_spreads,
+    #     base_features=base_feats,
+    #     include_seasonality=True,
+    #     parquet_path='data/cv_all_subsets.parquet',
+    #     n_splits=5,
+    #     verbose=True
+    # )
+    #
+    # # Inspect final best model per spread
+    # for spread, info in best_results.items():
+    #     print(f"\nSpread: {spread}")
+    #     print("Best Subset:", info['best_subset'])
+    #     print("Avg CV Metrics:", info['metrics'])
+    #     # info['model'] is the last fold's model from the CV
 
     cv = pd.read_parquet('data/cv_all_subsets.parquet')
     opt = []

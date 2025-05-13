@@ -22,6 +22,17 @@ def filter_adjusted_close(data):
     filtered_data.columns = [symbol for symbol, _ in filtered_data.columns]
     return filtered_data
 
+def get_price(x):
+    try:
+        t = yf.Ticker(x)
+        data = t.history(period="1d")
+        data.index = pd.to_datetime(data.index).date
+        latest_price = data[['Close']].tail(1)
+        return latest_price
+    except Exception as e:
+        print(f"Error retrieving {x} price: {e}")
+        return None
+
 def run():
     # List of stock symbols to fetch data for
     stonks = [
@@ -46,7 +57,11 @@ def run():
         print("Failed to fetch data")
 
 def main():
-    run()
+    v = get_price("^VIX")
+    print(v)
+
+    s = get_price("^GSPC")
+    print(s)
 
 if __name__ == "__main__":
     main()
