@@ -1,7 +1,33 @@
+import random
+import atexit
+import requests
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
+from requests_ip_rotator import ApiGateway, EXTRA_REGIONS
 import utils
+
+# ─── 1) Spin up an IP-rotating gateway on Yahoo's CloudFront endpoint
+gateway = ApiGateway(
+    "https://query1.finance.yahoo.com",
+    regions=EXTRA_REGIONS,
+    access_key_id=utils.AWS_ACCESS,
+    access_key_secret=utils.AWS_SECRET
+)
+gateway.start()
+atexit.register(lambda: gateway.shutdown())
+
+# ─── 2) Make a session that uses that gateway
+rotating_session = requests.Session()
+rotating_session.mount("https://query1.finance.yahoo.com", gateway)
+
+# ─── 3) A small pool of User‑Agents to rotate through
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)…",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)…",
+    "Mozilla/5.0 (X11; Linux x86_64)…",
+    # add more if you like
+]
 
 
 def fetch_yahoo_finance_data(symbols, start_date, end_date):
@@ -22,15 +48,26 @@ def filter_adjusted_close(data):
     filtered_data.columns = [symbol for symbol, _ in filtered_data.columns]
     return filtered_data
 
-def get_price(x):
+def get_price(symbol):
+    """
+    Fetch the latest close for a single ticker, rotating both IP and UA.
+    """
     try:
-        t = yf.Ticker(x)
-        data = t.history(period="1d")
-        data.index = pd.to_datetime(data.index).date
-        latest_price = data[['Close']].tail(1)
-        return latest_price
+        # rotate UA on every call
+        rotating_session.headers.update({
+            "User-Agent": random.choice(USER_AGENTS)
+        })
+
+        # pass our rotating session into yfinance
+        t = yf.Ticker(symbol, session=rotating_session)
+        df = t.history(period="1d", timeout=10)
+
+        # post-process
+        df.index = pd.to_datetime(df.index).date
+        return df[["Close"]].tail(1)
+
     except Exception as e:
-        print(f"Error retrieving {x} price: {e}")
+        print(f"Error retrieving {symbol}: {e}")
         return None
 
 def run():
