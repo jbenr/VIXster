@@ -1,4 +1,5 @@
 import random
+import time
 import atexit
 import requests
 import yfinance as yf
@@ -7,7 +8,7 @@ from datetime import datetime, timedelta
 from requests_ip_rotator import ApiGateway, EXTRA_REGIONS
 import utils
 
-# ─── 1) Spin up an IP-rotating gateway on Yahoo's CloudFront endpoint
+# 1) Spin up the gateway
 gateway = ApiGateway(
     "https://query1.finance.yahoo.com",
     regions=EXTRA_REGIONS,
@@ -17,16 +18,16 @@ gateway = ApiGateway(
 gateway.start()
 atexit.register(lambda: gateway.shutdown())
 
-# ─── 2) Make a session that uses that gateway
+# 2) Mount it on both query1 AND query2 (yfinance uses both)
 rotating_session = requests.Session()
 rotating_session.mount("https://query1.finance.yahoo.com", gateway)
+rotating_session.mount("https://query2.finance.yahoo.com", gateway)
 
-# ─── 3) A small pool of User‑Agents to rotate through
+# 3) User‑Agent pool
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)…",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)…",
-    "Mozilla/5.0 (X11; Linux x86_64)…",
-    # add more if you like
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    "Mozilla/5.0 (X11; Linux x86_64)",
 ]
 
 
@@ -50,10 +51,14 @@ def filter_adjusted_close(data):
 
 def get_price(symbol):
     """
-    Fetch the latest close for a single ticker, rotating both IP and UA.
+    Fetch the latest close for a single ticker, rotating both IP and UA,
+    and sleeping a bit to avoid hammering the server.
     """
     try:
-        # rotate UA on every call
+        # small random delay
+        time.sleep(random.uniform(0.5, 1.5))
+
+        # rotate UA
         rotating_session.headers.update({
             "User-Agent": random.choice(USER_AGENTS)
         })
@@ -62,13 +67,13 @@ def get_price(symbol):
         t = yf.Ticker(symbol, session=rotating_session)
         df = t.history(period="1d", timeout=10)
 
-        # post-process
         df.index = pd.to_datetime(df.index).date
         return df[["Close"]].tail(1)
 
     except Exception as e:
         print(f"Error retrieving {symbol}: {e}")
         return None
+
 
 def run():
     # List of stock symbols to fetch data for
