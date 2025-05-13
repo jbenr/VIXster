@@ -2,20 +2,13 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 import utils
-import requests
 
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/113.0.0.0 Safari/537.36"
-})
 
 def fetch_yahoo_finance_data(symbols, start_date, end_date):
     """
     Fetch historical daily stock data for given symbols from Yahoo Finance.
     """
-    data = yf.download(symbols, start=start_date, end=end_date, group_by='ticker', session=session)
+    data = yf.download(symbols, start=start_date, end=end_date, group_by='ticker')
     data = filter_adjusted_close(data)
     return data
 
@@ -31,7 +24,7 @@ def filter_adjusted_close(data):
 
 def get_price(x):
     try:
-        t = yf.Ticker(x, session=session)
+        t = yf.Ticker(x)
         data = t.history(period="1d")
         data.index = pd.to_datetime(data.index).date
         latest_price = data[['Close']].tail(1)
