@@ -449,6 +449,7 @@ with tabs[2]:
     base_url = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 
     if st.button("Refresh NAV Data"):
+        utils.git_push("auto push on NAV ref")
         status_placeholder = st.empty()
         progress_bar = st.progress(0)
         try:
