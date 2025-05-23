@@ -8,27 +8,6 @@ from datetime import datetime, timedelta
 from requests_ip_rotator import ApiGateway, EXTRA_REGIONS
 import utils
 
-# 1) Spin up the gateway
-gateway = ApiGateway(
-    "https://query1.finance.yahoo.com",
-    regions=EXTRA_REGIONS,
-    access_key_id=utils.AWS_ACCESS,
-    access_key_secret=utils.AWS_SECRET
-)
-gateway.start()
-atexit.register(lambda: gateway.shutdown())
-
-# 2) Mount it on both query1 AND query2 (yfinance uses both)
-rotating_session = requests.Session()
-rotating_session.mount("https://query1.finance.yahoo.com", gateway)
-rotating_session.mount("https://query2.finance.yahoo.com", gateway)
-
-# 3) User‑Agent pool
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-    "Mozilla/5.0 (X11; Linux x86_64)",
-]
 
 
 def fetch_yahoo_finance_data(symbols, start_date, end_date):
@@ -58,13 +37,15 @@ def get_price(symbol):
         # small random delay
         time.sleep(random.uniform(0.5, 1.5))
 
-        # rotate UA
-        rotating_session.headers.update({
-            "User-Agent": random.choice(USER_AGENTS)
-        })
+        # # rotate UA
+        # rotating_session.headers.update({
+        #     "User-Agent": random.choice(USER_AGENTS)
+        # })
 
         # pass our rotating session into yfinance
-        t = yf.Ticker(symbol, session=rotating_session)
+        t = yf.Ticker(symbol
+                      # , session=rotating_session
+                      )
         df = t.history(period="1d", timeout=10)
 
         df.index = pd.to_datetime(df.index).date
@@ -73,6 +54,31 @@ def get_price(symbol):
     except Exception as e:
         print(f"Error retrieving {symbol}: {e}")
         return None
+
+
+def scrape_vix():
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+
+    service = Service("/usr/local/bin/chromedriver")
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    driver = webdriver.Chrome(service=service, options=options)
+
+    driver.get("https://www.cboe.com/tradable_products/vix/")
+    # time.sleep(2)  # you may need longer depending on your connection
+
+    # 3. Inspect in your browser to find the right CSS selector.
+    #    For example (this will almost certainly change!):
+    price_elem = driver.find_element(
+        By.CSS_SELECTOR,
+        "#charts-tile > div > div > div:nth-child(1) > div.Box-cui__sc-6h7t1h-0.BorderBox-cui__sc-100l55d-0.eLdhlz.lewxc > div.Box-cui__sc-6h7t1h-0.Text-cui__sc-1owhlvg-0.khbfga.cSVxuZ")
+    print("Live VIX price:", price_elem.text)
+
+    driver.quit()
+    return int(price_elem.text)
 
 
 def run():
