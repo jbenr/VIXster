@@ -455,6 +455,8 @@ with tabs[2]:
             st.session_state["perf_df"] = df
             st.session_state["investor_results"] = investor_results
             status.success(f"Performance data updated at {datetime.now():%Y-%m-%d %H:%M:%S}.")
+            utils.git_push(f"auto push on NAV ref {datetime.now()}")
+
         except Exception as e:
             status.error(f"Error updating performance data: {e}")
 
