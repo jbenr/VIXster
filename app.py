@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
 import os
-import xml.etree.ElementTree as ET
-import requests
 from datetime import datetime
 import subprocess
 import altair as alt
@@ -12,6 +9,8 @@ import utils
 
 from prep_data_2 import load_data, feature_engineer
 from backtest_lin_ls import load_models, generate_all_predictions, ranked_strategy_vol_adjusted
+from update_data import pull_performance
+import update_data
 
 # If your IBKR spread streamer writes updated data to this file:
 SPREAD_FILE = "sheet/spreads.parquet"
@@ -172,24 +171,30 @@ with tabs[0]:
     if st.button("Update Historical Data"):
         # Show a spinner message while the script runs
         with st.spinner("Running update_data.py ..."):
-            cmd = [
-                "conda", "run", "-n", "algo",
-                "bash", "-c",
-                "python update_data.py"
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            st.success("Data updated successfully!")
-        else:
-            st.error(f"Data update failed with return code {result.returncode}")
-            if result.stderr:
-                st.write("**Script errors:**")
-                st.code(result.stderr)
-
-        if result.stdout:
-            st.write("**Script output:**")
-            st.code(result.stdout)
+            try:
+                # Directly call the run() function from update_data.py
+                update_data.run()
+                st.success("Data updated successfully!")
+            except Exception as e:
+                st.error(f"Data update failed with error:\n{e}")
+        #     cmd = [
+        #         "conda", "run", "-n", "algo",
+        #         "bash", "-c",
+        #         "python update_data.py"
+        #     ]
+        #     result = subprocess.run(cmd, capture_output=True, text=True)
+        #
+        # if result.returncode == 0:
+        #     st.success("Data updated successfully!")
+        # else:
+        #     st.error(f"Data update failed with return code {result.returncode}")
+        #     if result.stderr:
+        #         st.write("**Script errors:**")
+        #         st.code(result.stderr)
+        #
+        # if result.stdout:
+        #     st.write("**Script output:**")
+        #     st.code(result.stdout)
 
 # ------------------ MODEL TAB ------------------ #
 with tabs[1]:
@@ -437,181 +442,161 @@ with tabs[1]:
 with tabs[2]:
     st.header("Historical Performance")
 
-    token = "154979803551046183567560"
-    queryId = "1155973"
-    base_url = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
-
+    # -----------------------------
+    # 1) “Refresh NAV Data” button
+    # -----------------------------
     if st.button("Refresh NAV Data"):
-        utils.git_push(f"auto push on NAV ref {datetime.now()}")
-        status_placeholder = st.empty()
-        progress_bar = st.progress(0)
+        status = st.empty()
         try:
-            status_placeholder.info("Requesting Flex Statement Reference Code...")
-            send_url = f"{base_url}/SendRequest?t={token}&q={queryId}&v=3"
-            send_response = requests.get(send_url)
-            root = ET.fromstring(send_response.text)
-            ref_code = root.find("ReferenceCode").text
-            status_placeholder.success(f"Received Reference Code: {ref_code}")
-
-            get_url = f"{base_url}/GetStatement?t={token}&q={ref_code}&v=3"
-            for attempt in range(10):
-                progress_bar.progress((attempt + 1) / 10)
-                status_placeholder.info(f"Attempt {attempt + 1}: Requesting Flex Statement...")
-                get_response = requests.get(get_url)
-                if get_response.content.strip():
-                    with open("sheet/Summ.xml", "wb") as f:
-                        f.write(get_response.content)
-                    status_placeholder.success("Flex Statement downloaded successfully.")
-                    time.sleep(3)
-                    break
-                status_placeholder.warning(f"Statement not ready. Waiting 10 seconds...")
-                time.sleep(10)
-            else:
-                status_placeholder.error("All attempts failed.")
-            progress_bar.empty()
+            # Now saving to "data/performance.parquet"
+            df, investor_results = pull_performance(
+                out_parquet="data/performance.parquet"
+            )
+            st.session_state["perf_df"] = df
+            st.session_state["investor_results"] = investor_results
+            status.success(f"Performance data updated at {datetime.now():%Y-%m-%d %H:%M:%S}.")
         except Exception as e:
-            status_placeholder.error(f"Error: {e}")
-            progress_bar.empty()
+            status.error(f"Error updating performance data: {e}")
 
-    if not os.path.exists("sheet/Summ.xml"):
-        st.warning("Summ.xml not found. Please refresh NAV data.")
+    # ------------------------------------------------------
+    # 2) Decide where to get the DataFrame (df) from:
+    #    • If session_state has “perf_df”, use that.
+    #    • Else if "data/performance.parquet" exists, load df from disk.
+    #    • Otherwise stop and ask the user to refresh.
+    # ------------------------------------------------------
+    if "perf_df" in st.session_state:
+        df = st.session_state["perf_df"]
+    elif os.path.exists("data/performance.parquet"):
+        df = pd.read_parquet("data/performance.parquet")
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date").reset_index(drop=True)
     else:
-        try:
-            tree = ET.parse("sheet/Summ.xml")
-            root = tree.getroot()
+        st.warning("No performance data found. Click “Refresh NAV Data” to pull the latest.")
+        st.stop()
 
-            rows = []
-            for statement in root.iter("FlexStatement"):
-                date = statement.get("fromDate")
-                change_nav = statement.find("ChangeInNAV")
-                start_nav = float(change_nav.get("startingValue", 0))
-                net_inflow = float(change_nav.get("depositsWithdrawals", 0))
-                end_nav = float(change_nav.get("endingValue", 0))
-                rows.append([date, start_nav, net_inflow, end_nav])
+    # ------------------------------------------------------
+    # 3) Decide where to get investor_results from:
+    #    • If session_state has “investor_results”, use that.
+    #    • Otherwise, leave it empty (user must refresh to populate).
+    # ------------------------------------------------------
+    investor_results = st.session_state.get("investor_results", {})
 
-            df = pd.DataFrame(rows, columns=["Date", "Start NAV", "Net Inflow", "End NAV"])
+    # If df is empty or investor_results was never populated, show an info bar:
+    if df.empty:
+        st.error("Loaded performance data is empty. Try clicking “Refresh NAV Data” again.")
+        st.stop()
 
-            total_inflows = df["Net Inflow"].sum()
-            benjin_investment = total_inflows - chuck_initial_investment
+    # ─── 4) Strategy‐level Monthly & Yearly Returns ────────────────────────────────
+    df_monthly = (
+        df.set_index("Date")
+          .resample("ME")
+          .agg({
+              "Start NAV": "first",
+              "End NAV":   "last",
+              "Net Inflow": "sum"
+          })
+    )
+    df_monthly["MonthlyReturn"] = (
+        (df_monthly["End NAV"] - df_monthly["Start NAV"] - df_monthly["Net Inflow"])
+        / df_monthly["Start NAV"]
+    ) * 100
+    df_monthly.index = df_monthly.index.strftime("%b %y")
 
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-            df = df.dropna(subset=["Date", "Start NAV", "End NAV"]).sort_values("Date")
-            df = df[df["Start NAV"] >= 100]
-            df = df[df["Date"] >= strategy_start_date]
+    df_yearly = (
+        df.set_index("Date")
+          .resample("YE")
+          .agg({
+              "Start NAV": "first",
+              "End NAV":   "last",
+              "Net Inflow": "sum"
+          })
+    )
+    df_yearly["YearlyReturn"] = (
+        (df_yearly["End NAV"] - df_yearly["Start NAV"] - df_yearly["Net Inflow"])
+        / df_yearly["Start NAV"]
+    ) * 100
+    df_yearly.index = df_yearly.index.year
 
-            if df.empty:
-                st.error("No valid NAV data after filtering. Check Summ.xml.")
-                st.stop()
+    st.subheader("Strategy Returns")
+    st.table(
+        df_monthly[["MonthlyReturn"]]
+        .T
+        .style.map(lambda v: "color: green" if v > 0 else "color: red")
+        .format("{:.2f}%")
+    )
+    st.table(
+        df_yearly[["YearlyReturn"]]
+        .T
+        .style.map(lambda v: "color: green" if v > 0 else "color: red")
+        .format("{:.2f}%")
+    )
 
-            # Calculate Returns
-            df["Cumulative NAV"] = df["End NAV"]
+    total_return = (
+        df["End NAV"].iloc[-1]
+        - df["Start NAV"].iloc[0]
+        - df["Net Inflow"].sum()
+    ) / df["Start NAV"].iloc[0]
+    st.table(
+        pd.DataFrame({"Total Return %": [total_return * 100]}, index=["Strategy"])
+        .style.map(lambda v: "color: green" if v > 0 else "color: red")
+        .format("{:.2f}%")
+    )
 
-            df["Ben NAV"] = df["Cumulative NAV"] * (1 - chuck_pct)
-            df["Chuck NAV"] = df["Cumulative NAV"] * chuck_pct
+    # ─── 5) Strategy‐level Performance Chart ───────────────────────────────────────
+    # st.subheader("Performance Chart (% Return)")
+    #
+    # # Compute daily return: ((End NAV - Net Inflow) - Start NAV) / Start NAV
+    # df["DailyReturn"] = ((df["End NAV"] - df["Net Inflow"]) - df["Start NAV"]) / df["Start NAV"]
+    #
+    # # Compute cumulative return by compounding: (1 + r).cumprod() - 1
+    # df["CumulativeReturn"] = (1 + df["DailyReturn"]).cumprod() - 1
+    #
+    # st.line_chart(
+    #     df.set_index("Date")[["CumulativeReturn"]].rename(columns={"CumulativeReturn": "% Return"})
+    # )
 
-            df_monthly = df.set_index("Date").resample("ME").agg({
-                "Start NAV": "first",
-                "End NAV": "last",
-                "Net Inflow": "sum"
-            })
-            df_monthly["MonthlyReturn"] = (
-                (df_monthly["End NAV"] - df_monthly["Start NAV"] - df_monthly["Net Inflow"]) / df_monthly["Start NAV"]
-            ) * 100
-            df_monthly.index = df_monthly.index.strftime("%b %y")
+    # ─── 7) Investor Details (logo above each table, then separate st.table) ────
+    st.subheader("The Gentlemen")
+    if investor_results:
+        for name, info in investor_results.items():
+            logo_url = info.get("logo_url", "")
+            logo_height = info.get("logo_height", 40)
 
-            df_yearly = df.set_index("Date").resample("YE").agg({
-                "Start NAV": "first",
-                "End NAV": "last",
-                "Net Inflow": "sum"
-            })
-            df_yearly["YearlyReturn"] = (
-                (df_yearly["End NAV"] - df_yearly["Start NAV"] - df_yearly["Net Inflow"]) / df_yearly["Start NAV"]
-            ) * 100
-            df_yearly.index = df_yearly.index.year
+            # Render logo via HTML <img> tag
+            if logo_url:
+                st.markdown(
+                    f"""
+                    <div style="display: flex; align-items: center; gap: 10px; margin-top: 1em;">
+                        <img src="{logo_url}" style="height:{logo_height}px; width:auto;"/>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f"<div style='font-size:1.2em; font-weight:bold; margin-top:1em;'>{name}</div>",
+                    unsafe_allow_html=True
+                )
 
-            st.subheader("Returns")
+            inv_df = pd.DataFrame({
+                "Initial Investment": [info["initial_investment"]],
+                "Current Value":      [info["current_value"]],
+                "PnL":                [info["pnl"]],
+                "Returns %":          [info["return_pct"]]
+            }, index=[name])
+
             st.table(
-                df_monthly[["MonthlyReturn"]]
-                .T
-                .style.map(lambda v: "color: green" if v > 0 else "color: red")
-                .format("{:.2f}%")
+                inv_df.style
+                .format({
+                    "Initial Investment": "${:,.2f}",
+                    "Current Value":      "${:,.2f}",
+                    "PnL":                "${:,.2f}",
+                    "Returns %":          "{:.2f}%"
+                })
+                .applymap(lambda v: "color: green" if v > 0 else "color: red", subset=["PnL", "Returns %"])
             )
+    else:
+        st.info("Investor details not yet populated. Click “Refresh NAV Data” to fetch investor info.")
 
-            st.table(
-                df_yearly[["YearlyReturn"]]
-                .T
-                .style.map(lambda v: "color: green" if v > 0 else "color: red")
-                .format("{:.2f}%")
-            )
-
-            total_return = (
-                df["End NAV"].iloc[-1]
-                - df["Start NAV"].iloc[0]
-                - df["Net Inflow"].sum()
-            ) / df["Start NAV"].iloc[0]
-            st.table(
-                pd.DataFrame({"Total Return %": [total_return * 100]}, index=["Strategy"])
-                .style.map(lambda v: "color: green" if v > 0 else "color: red")
-                .format("{:.2f}%")
-            )
-
-            st.subheader("Performance Chart")
-            st.line_chart(
-                df.set_index("Date")[["Cumulative NAV"]].rename(columns={"Cumulative NAV": "NAV Trajectory"})
-            )
-
-            # Combine Benjin + Wagon logic here.
-            # Benjin next to the header with an inline image:
-            st.markdown(
-                """
-                <div style="display: flex; align-items: center; gap: 10px; margin-top: 1em;">
-                    <img src="https://cdn.freebiesupply.com/images/large/2x/washington-redskins-logo-transparent.png" style="height:50px; width:auto;"/>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            df_ben = df.copy()
-            ben_current_value = df_ben["Ben NAV"].iloc[-1]
-            ben_pnl = ben_current_value - benjin_investment
-            ben_return = (ben_pnl / benjin_investment) * 100
-            ben_data = pd.DataFrame({
-                "Initial Investment": [benjin_investment],
-                "Current Value": [ben_current_value],
-                "PnL": [ben_pnl],
-                "Returns %": [ben_return]
-            }, index=["Benjin"])
-            st.table(
-                ben_data.style.map(
-                    lambda v: "color: green" if v > 0 else "color: red", subset=["PnL", "Returns %"]
-                ).format("{:.2f}")
-            )
-
-            # Wagon next to the header with an inline image:
-            st.markdown(
-                """
-                <div style="display: flex; align-items: center; gap: 10px; margin-top: 2em;">
-                    <img src="https://upload.wikimedia.org/wikipedia/commons/archive/5/5c/20240330094136%21Chicago_Bears_logo.svg" style="height:40px; width:auto;"/>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            wagon_df = df[df["Date"] >= pd.to_datetime(chuck_invest_date)].copy()
-            chuck_current_value = wagon_df["Chuck NAV"].iloc[-1]
-            wagon_pnl = chuck_current_value - chuck_initial_investment
-            wagon_return = (wagon_pnl / chuck_initial_investment) * 100
-            chuck_data = pd.DataFrame({
-                "Initial Investment": [chuck_initial_investment],
-                "Current Value": [chuck_current_value],
-                "PnL": [wagon_pnl],
-                "Returns %": [wagon_return]
-            }, index=["Chuck"])
-            st.table(
-                chuck_data.style.map(
-                    lambda v: "color: green" if v > 0 else "color: red", subset=["PnL", "Returns %"]
-                ).format("{:.2f}")
-            )
-
-            st.session_state["df"] = df  # Keep for reference if needed.
-
-        except Exception as e:
-            st.error(f"Error processing Summ.xml: {e}")
+    # ─── 8) Store df in session_state in case other tabs need it ──────────────────
+    st.session_state["df"] = df
