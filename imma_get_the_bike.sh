@@ -38,7 +38,7 @@ tmux send-keys -t $SESSION:1 "tailscale funnel 8501" C-m
 # -------------------- Window 4: Tailscale + Funnel --------------------
 tmux new-window -t $SESSION -n streamer
 tmux send-keys -t $SESSION:2 "conda activate sheet" C-m
-tmux send-keys -t $SESSION:2 "cd ~/pod/VIXster/sheet" C-m
+tmux send-keys -t $SESSION:2 "cd ~/pod/VIXster" C-m
 tmux send-keys -t $SESSION:2 "python ibkr_stream_spreads.py" C-m
 
 # -------------------- Attach to session --------------------

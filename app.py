@@ -13,7 +13,7 @@ from update_data import pull_performance
 import update_data
 
 # If your IBKR spread streamer writes updated data to this file:
-SPREAD_FILE = "sheet/spreads.parquet"
+SPREAD_FILE = "data/spreads.parquet"
 
 st.set_page_config(layout="wide")
 st.markdown(

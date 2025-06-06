@@ -131,7 +131,7 @@ def pull_performance(
 
     # 2) Poll until Summ.xml is ready, then write it to disk
     get_url = f"{base_url}/GetStatement?t={token}&q={ref_code}&v=3"
-    summ_path = "sheet/Summ.xml"
+    summ_path = "data/Summ.xml"
 
     for attempt in range(10):
         resp = requests.get(get_url)

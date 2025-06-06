@@ -10,7 +10,7 @@ from tabulate import tabulate, tabulate_formats
 import pyarrow  # Ensure pyarrow is installed for Parquet writing
 from dateutil.relativedelta import relativedelta
 
-PARQUET_FILE = "spreads.parquet"
+PARQUET_FILE = "data/spreads.parquet"
 
 class BApi(EWrapper, EClient):
     def __init__(self):
