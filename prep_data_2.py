@@ -3,13 +3,15 @@ import numpy as np
 import utils
 import yahoooo
 from yahoooo import get_price
+from datetime import datetime
 
 def load_data(live=False):
     print("\n=== Loading Data ===")
 
-    macro_data = pd.read_parquet('data/fred.parquet').dropna()
+    macro_data = pd.read_parquet('data/fred.parquet')
     print(f"Pulled fred data. shape: {macro_data.shape}")
     macro_data.index = pd.to_datetime(macro_data.index).date
+    # macro_data.dropna(inplace=True)
 
     # spx_options_df = pd.read_parquet("data/spx_options.parquet")
     # print(f"Pulled SPX options data. shape: {spx_options_df.shape}")
@@ -39,12 +41,6 @@ def load_data(live=False):
     vix_futures_df = vix_futures_df[vix_futures_df["Trade_Date"].isin(common_trade_dates)]
     vix_spreads = vix_spreads.loc[common_trade_dates]
 
-    # utils.pdf(spx_options_df.tail(10))
-    # utils.pdf(macro_data.tail(10))
-    # print(spx_options_df.columns)
-    # utils.pdf(vix_futures_df.tail(10))
-    # utils.pdf(vix_spreads.tail(10))
-
     fut_feats = vix_futures_df[['Trade_Date','DTR','DFR']].drop_duplicates()
     fut_feats.set_index('Trade_Date', inplace=True)
 
@@ -57,6 +53,7 @@ def load_data(live=False):
         vx.columns = ['VIX']
         sp = yahoooo.get_price('^GSPC')
         sp.columns = ['SP500']
+        print(vx, sp)
 
         live_spreads = pd.read_parquet('sheet/spreads.parquet')
         max_date = live_spreads['Last Update'].max()
@@ -66,8 +63,20 @@ def load_data(live=False):
         live_spreads = live_spreads[['Spread',max_date]].set_index("Spread").T
         live_spreads.index = pd.to_datetime(live_spreads.index).date
 
-        live_spreads = pd.merge(live_spreads, vx, left_index=True, right_index=True)
-        live_spreads = pd.merge(live_spreads, sp, left_index=True, right_index=True)
+        live_spreads = pd.merge(live_spreads, vx, left_index=True, right_index=True, how='left')
+        live_spreads = pd.merge(live_spreads, sp, left_index=True, right_index=True, how='left')
+
+        max_date_ = datetime.strptime(max_date, "%Y-%m-%d %H:%M:%S").date()
+        for col in live_spreads.columns:
+            if pd.isna(live_spreads.loc[max_date_, col]):
+                try:
+                    price_df = get_price(col)
+                    if price_df is not None:
+                        live_price = price_df["Close"].iloc[0]
+                        live_spreads.at[max_date_, col] = live_price
+                        print(f"Filled {col} on {max_date_} → {live_price}")
+                except Exception as e:
+                    print(f"Couldn’t get a live price for {col}: {e}")
 
         df = df[['1-2','2-3','3-4','4-5','5-6','6-7','7-8','VIX','SP500','DTR','DFR']]
         df = pd.concat([df,live_spreads])
@@ -83,7 +92,6 @@ def load_data(live=False):
         df = df.fillna(0)
 
     utils.pdf(df.tail(3))
-
     print("=== Data Loaded & Dates Parsed ===\n")
 
     return df
@@ -142,6 +150,8 @@ def cluster_regimes(data, n_clusters=4, cluster_features=['VIX', 'SP500_drawdown
 
 if __name__ == "__main__":
     df = load_data(live=True)
+    print("+++ Lock and load")
+    utils.pdf(df.tail(3))
     data = feature_engineer(df)
     # data.to_parquet('data/live_features.parquet')
     utils.pdf(data.tail(5))

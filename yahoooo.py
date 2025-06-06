@@ -30,58 +30,6 @@ def filter_adjusted_close(data):
     filtered_data.columns = [symbol for symbol, _ in filtered_data.columns]
     return filtered_data
 
-# def get_price(symbol):
-#     """
-#     Fetch the latest close for a single ticker, rotating both IP and UA,
-#     and sleeping a bit to avoid hammering the server.
-#     """
-#     try:
-#         # small random delay
-#         time.sleep(random.uniform(0.5, 1.5))
-#
-#         # # rotate UA
-#         # rotating_session.headers.update({
-#         #     "User-Agent": random.choice(USER_AGENTS)
-#         # })
-#
-#         # pass our rotating session into yfinance
-#         t = yf.Ticker(symbol
-#                       # , session=rotating_session
-#                       )
-#         df = t.history(period="1d", timeout=10)
-#
-#         df.index = pd.to_datetime(df.index).date
-#         return df[["Close"]].tail(1)
-#
-#     except Exception as e:
-#         print(f"Error retrieving {symbol}: {e}")
-#         return None
-#
-#
-# def scrape_vix():
-#     from selenium import webdriver
-#     from selenium.webdriver.chrome.service import Service
-#     from selenium.webdriver.common.by import By
-#
-#     service = Service("/usr/local/bin/chromedriver")
-#     options = webdriver.ChromeOptions()
-#     options.add_argument("--headless")
-#     options.add_argument("--disable-gpu")
-#     driver = webdriver.Chrome(service=service, options=options)
-#
-#     driver.get("https://www.cboe.com/tradable_products/vix/")
-#     # time.sleep(2)  # you may need longer depending on your connection
-#
-#     # 3. Inspect in your browser to find the right CSS selector.
-#     #    For example (this will almost certainly change!):
-#     price_elem = driver.find_element(
-#         By.CSS_SELECTOR,
-#         "#charts-tile > div > div > div:nth-child(1) > div.Box-cui__sc-6h7t1h-0.BorderBox-cui__sc-100l55d-0.eLdhlz.lewxc > div.Box-cui__sc-6h7t1h-0.Text-cui__sc-1owhlvg-0.khbfga.cSVxuZ")
-#     print("Live VIX price:", price_elem.text)
-#
-#     driver.quit()
-#     return int(price_elem.text)
-
 
 def scraper(url: str, css_selector: str) -> float:
     """
@@ -112,14 +60,23 @@ def scraper(url: str, css_selector: str) -> float:
 
 def get_price(symbol: str) -> pd.DataFrame | None:
     """
-    Fetch the latest close for `symbol`. If symbol is "^VIX" or "^GSPC",
-    first attempt to scrape a live price; if that fails, fall back to yfinance.
-    Otherwise, just use yfinance.
-    Returns a DataFrame with a single-row index = today’s date, column "Close".
+    Fetch the latest close for a single ticker or index name.
+    If the user passes "VIX" or "^VIX", we attempt to scrape CBOE first.
+    Otherwise, or if scraping fails, we fall back to yfinance.
+    Returns a 1×1 DataFrame (index=today’s date, column="Close"), or None on failure.
     """
-    # Define scraping rules for special tickers
+
+    # 1) Normalize the incoming symbol into a “base” name:
+    if symbol == "VIX" or symbol == "^VIX":
+        base_symbol = "VIX"
+    elif symbol == "SP500" or symbol == "^GSPC":
+        base_symbol = "SP500"
+    else:
+        base_symbol = symbol  # e.g. "VVIX", "BTC", "AAPL", etc.
+
+    # 2) Define scraping rules keyed by the base name:
     scraping_info = {
-        "^VIX": {
+        "VIX": {
             "url": "https://www.cboe.com/tradable_products/vix/",
             "css": (
                 "#charts-tile > div > div > div:nth-child(1) "
@@ -127,45 +84,53 @@ def get_price(symbol: str) -> pd.DataFrame | None:
                 "eLdhlz.lewxc > div.Box-cui__sc-6h7t1h-0.Text-cui__sc-1owhlvg-0."
                 "khbfga.cSVxuZ"
             ),
+            # If scraping fails, we’ll fallback to yfinance("^VIX").
         },
-        "^GSPC": {
+        "SP500": {
             "url": "https://www.cnbc.com/quotes/.SPX",
-            "css": "#quote-page-strip > div.QuoteStrip-dataContainer "
-                   "> div.QuoteStrip-lastTimeAndPriceContainer "
-                   "> div.QuoteStrip-lastPriceStripContainer "
-                   "> span.QuoteStrip-lastPrice",
-            # on Yahoo Finance, this selector grabs the SPX live price
+            "css": (
+                "#quote-page-strip > div.QuoteStrip-dataContainer "
+                "> div.QuoteStrip-lastTimeAndPriceContainer "
+                "> div.QuoteStrip-lastPriceStripContainer "
+                "> span.QuoteStrip-lastPrice"
+            ),
+            # If scraping fails, we’ll fallback to yfinance("^GSPC").
         },
     }
 
-    # If symbol is in our scrape‐list, try scraping first
-    if symbol in scraping_info:
-        info = scraping_info[symbol]
+    # 3) If base_symbol is exactly "VIX" or "SP500", attempt to scrape first:
+    if base_symbol in scraping_info:
+        info = scraping_info[base_symbol]
         try:
-            # small random delay to avoid hammering
+            # avoid hammering the site
             time.sleep(random.uniform(0.5, 1.5))
             live_price = scraper(info["url"], info["css"])
-            # wrap into a 1x1 DataFrame with today's date as index
             today = datetime.now().date()
-            df_live = pd.DataFrame({"Close": [live_price]}, index=[today])
-            return df_live
+            return pd.DataFrame({"Close": [live_price]}, index=[today])
 
         except Exception as e:
-            print(f"Scraping fallback for {symbol} failed: {e}. Falling back to yfinance...")
+            print(f"Scraping for {base_symbol} failed: {e}. Falling back to yfinance…")
 
-    # Fallback (or non‐special symbol): use yfinance
+    # 4) FALLBACK: use yfinance.  But if base_symbol was "VIX"/"SP500",
+    #    we need to map back to the proper “caret” ticker:
+    yf_symbol = symbol
+    if base_symbol == "VIX":
+        yf_symbol = "^VIX"
+    elif base_symbol == "SP500":
+        yf_symbol = "^GSPC"
+    # Otherwise (e.g. base_symbol = "VVIX" or "BTC"), we just use the original `symbol`.
+
     try:
         time.sleep(random.uniform(0.5, 1.5))
-        t = yf.Ticker(symbol)
+        t = yf.Ticker(yf_symbol)
         df = t.history(period="1d", timeout=10)
-
-        # ensure date index is just a date (no timestamps)
         df.index = pd.to_datetime(df.index).date
         return df[["Close"]].tail(1)
 
     except Exception as e:
-        print(f"Error retrieving {symbol} via yfinance: {e}")
+        print(f"Error retrieving {yf_symbol} via yfinance: {e}")
         return None
+
 
 def run():
     # List of stock symbols to fetch data for
@@ -198,4 +163,5 @@ def main():
     print(s)
 
 if __name__ == "__main__":
-    main()
+    # main()
+    None
