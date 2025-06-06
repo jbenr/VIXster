@@ -43,13 +43,6 @@ st.markdown(
 
 st.title("The Model")
 
-# ------------------ Constants ------------------ #
-strategy_start_date = datetime(2024, 8, 27)
-chuck_initial_investment = 7000
-chuck_strike = 20699.76
-chuck_pct = chuck_initial_investment / chuck_strike
-chuck_invest_date = datetime(2024, 3, 6)
-
 # ------------------ Tabs ------------------ #
 tabs = st.tabs(["Data", "Model", "Performance"])
 
