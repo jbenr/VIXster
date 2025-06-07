@@ -383,7 +383,7 @@ with tabs[1]:
                 short_spread = signal["ShortSpread"].values[0] if "ShortSpread" in signal.columns else None
                 for spread in target_spreads:
                     if f"Spread_{spread}" in signal.columns and f"Pred_{spread}" in signal.columns:
-                        resid = signal[f"Spread_{spread}"].values[0] - signal[f"Pred_{spread}"].values[0]
+                        resid = signal[f"Pred_{spread}"].values[0] - signal[f"Spread_{spread}"].values[0]
                         # Set color: green if spread == long_spread; red if spread == short_spread; else gray.
                         if spread == long_spread:
                             color = "green"
@@ -416,7 +416,7 @@ with tabs[1]:
                         else:
                             color = "gray"
                         z_scores.append({"Spread": spread, "Z_Score": z_val, "Color": color})
-                zscore_df = pd.DataFrame(z_scores)*-1
+                zscore_df = pd.DataFrame(z_scores)
 
                 bar_z = alt.Chart(zscore_df).mark_bar().encode(
                     x=alt.X("Spread:N", title="Spread"),

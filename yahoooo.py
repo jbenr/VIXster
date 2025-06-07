@@ -72,7 +72,7 @@ def get_price(symbol: str) -> pd.DataFrame | None:
     elif symbol == "SP500" or symbol == "^GSPC":
         base_symbol = "SP500"
     else:
-        base_symbol = symbol  # e.g. "VVIX", "BTC", "AAPL", etc.
+        return None  # e.g. "VVIX", "BTC", "AAPL", etc.
 
     # 2) Define scraping rules keyed by the base name:
     scraping_info = {
