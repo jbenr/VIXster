@@ -537,7 +537,7 @@ with tabs[2]:
     ) * 100
     df_yearly.index = df_yearly.index.year
 
-    st.subheader("Strategy Returns")
+    st.subheader("Returns")
 
     st.table(
         df_returns_pivot.style
@@ -558,27 +558,128 @@ with tabs[2]:
         - df["Net Inflow"].sum()
     ) / df["Start NAV"].iloc[0]
     st.table(
-        pd.DataFrame({"Total Return %": [total_return * 100]}, index=["Strategy"])
+        pd.DataFrame({"Total Return %": [total_return * 100]}, index=["Model"])
         .style.map(lambda v: "color: green" if v > 0 else "color: red")
         .format("{:.2f}%")
     )
 
-    # ─── 5) Strategy‐level Performance Chart ───────────────────────────────────────
-    # st.subheader("Performance Chart (% Return)")
-    #
-    # # Compute daily return: ((End NAV - Net Inflow) - Start NAV) / Start NAV
-    # df["DailyReturn"] = ((df["End NAV"] - df["Net Inflow"]) - df["Start NAV"]) / df["Start NAV"]
-    #
-    # # Compute cumulative return by compounding: (1 + r).cumprod() - 1
-    # df["CumulativeReturn"] = (1 + df["DailyReturn"]).cumprod() - 1
-    #
-    # st.line_chart(
-    #     df.set_index("Date")[["CumulativeReturn"]].rename(columns={"CumulativeReturn": "% Return"})
-    # )
+    df_monthly["Year"] = df_monthly.index.year
+    years = sorted(df_monthly["Year"].unique(), reverse=True)
+    col_spacer, col_select = st.columns([4, 1])
+    with col_select:
+        selected_year = st.selectbox("Filter Year", options=["All"] + [str(y) for y in years])
+
+    # --- Apply filter before calculating returns ---
+    if selected_year != "All":
+        year = int(selected_year)
+        df_monthly_filtered = df_monthly[df_monthly.index.year == year].copy()
+        df_feat_filtered = df_feat[df_feat.index.year == year].copy()
+    else:
+        df_monthly_filtered = df_monthly.copy()
+        df_feat_filtered = df_feat.copy()
+
+    # --- Strategy cumulative return ---
+    monthly_returns = df_monthly_filtered["MonthlyReturn"] / 100
+    strategy_cum_return = (1 + monthly_returns).cumprod() - 1
+    df_strategy = strategy_cum_return.rename("Cumulative Return").to_frame()
+    df_strategy["Date"] = df_strategy.index
+    df_strategy["Label"] = "Model"
+    df_strategy["MonthStr"] = df_strategy["Date"].dt.strftime("%b %Y")
+    df_strategy["Year"] = df_strategy["Date"].dt.year
+
+    # --- SPX cumulative return ---
+    df_spx = df_feat_filtered[["SP500"]].copy()
+    df_spx.index.name = "Date"
+    df_spx = df_spx.resample("ME").last()
+    df_spx = df_spx.loc[df_strategy.index.intersection(df_spx.index)]
+    spx_monthly_returns = df_spx["SP500"].pct_change().fillna(0)
+    spx_cum_return = (1 + spx_monthly_returns).cumprod() - 1
+    df_spx = spx_cum_return.rename("Cumulative Return").to_frame()
+    df_spx["Date"] = df_spx.index
+    df_spx["Label"] = "SP500"
+    df_spx["MonthStr"] = df_spx["Date"].dt.strftime("%b %Y")
+    df_spx["Year"] = df_spx["Date"].dt.year
+
+    # --- Combine and plot ---
+    df_plot = pd.concat([df_strategy, df_spx])
+    base = alt.Chart(df_plot).encode(
+        x=alt.X("MonthStr:N", title="Month", sort=df_plot["MonthStr"].tolist(), axis=alt.Axis(labelAngle=-45)),
+        y=alt.Y("Cumulative Return:Q", title="Cumulative Return", axis=alt.Axis(format='%')),
+        color=alt.Color("Label:N", title="", scale=alt.Scale(domain=["Model", "SP500"], range=["#886AEA", "#A6CEE3"])),
+        tooltip=[
+            alt.Tooltip("MonthStr:N", title="Month"),
+            alt.Tooltip("Label:N", title="Source"),
+            alt.Tooltip("Cumulative Return:Q", title="Return", format=".2%")
+        ]
+    )
+    line = base.mark_line()
+    points = base.mark_circle(size=35)
+    st.altair_chart((line + points).properties(height=350, title="Cumulative Monthly Returns: Model vs SPX"),
+                    use_container_width=True)
+
+    # --- Relative monthly returns ---
+    shared_dates = df_strategy.index.intersection(df_spx.index)
+
+    df_relative = pd.DataFrame(index=shared_dates)
+    df_relative["Model"] = df_monthly["MonthlyReturn"].loc[shared_dates] / 100
+    df_relative["SPX"] = df_feat["SP500"].pct_change(fill_method=None).resample("ME").last().loc[shared_dates]
+    df_relative["Outperformance"] = df_relative["Model"] - df_relative["SPX"]
+    df_relative.index.name = "Month"
+    df_relative = df_relative.reset_index()
+    df_relative["MonthStr"] = df_relative["Month"].dt.strftime("%b %Y")
+    df_relative["Year"] = df_relative["Month"].dt.year
+
+    if selected_year != "All":
+        df_relative = df_relative[df_relative["Year"] == int(selected_year)]
+
+    df_long = df_relative.melt(
+        id_vars=["Month", "MonthStr"],
+        value_vars=["Model", "SPX"],
+        var_name="Series",
+        value_name="Monthly Return"
+    )
+
+    bars_main = alt.Chart(df_long).mark_bar().encode(
+        x=alt.X("MonthStr:N", title="Month", sort=df_relative["MonthStr"].tolist(), axis=alt.Axis(labelAngle=-45)),
+        y=alt.Y("Monthly Return:Q", title="Return (%)", axis=alt.Axis(format='%')),
+        color=alt.Color("Series:N", title="", scale=alt.Scale(domain=["Model", "SPX"], range=["#886AEA", "#A6CEE3"])),
+        xOffset="Series:N",
+        tooltip=[
+            alt.Tooltip("MonthStr:N", title="Month"),
+            alt.Tooltip("Series:N", title="Series"),
+            alt.Tooltip("Monthly Return:Q", title="Return (%)", format=".2%")
+        ]
+    ).properties(
+        width=600,
+        height=200,
+        title="Monthly Returns: Model vs SPX"
+    )
+
+    bars_diff = alt.Chart(df_relative).mark_bar().encode(
+        x=alt.X("MonthStr:N", title="Month", sort=df_relative["MonthStr"].tolist(), axis=alt.Axis(labelAngle=-45)),
+        y=alt.Y("Outperformance:Q", title="Model - SPX (%)", axis=alt.Axis(format='%')),
+        color=alt.condition(
+            alt.datum.Outperformance > 0,
+            alt.value("green"),
+            alt.value("red")
+        ),
+        tooltip=[
+            alt.Tooltip("MonthStr:N", title="Month"),
+            alt.Tooltip("Outperformance:Q", title="Outperformance (%)", format=".2%")
+        ]
+    ).properties(
+        width=600,
+        height=150,
+        title="Relative Performance (Model - SPX)"
+    )
+
+    chart = alt.vconcat(bars_main, bars_diff).configure_axis(grid=True)
+    st.altair_chart(chart, use_container_width=True)
+
     st.markdown("<hr style='margin-top: 1em; margin-bottom: 1em;'>", unsafe_allow_html=True)
 
     # ─── 7) Investor Details (logo above each table, then separate st.table) ────
-    st.subheader("The Gentlemen")
+    st.subheader("The Lads")
     if investor_results:
         for name, info in investor_results.items():
             logo_url = info.get("logo_url", "")
