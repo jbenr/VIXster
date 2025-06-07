@@ -541,7 +541,7 @@ with tabs[2]:
 
     st.table(
         df_returns_pivot.style
-        .format("{:.2f}%")
+        .format("{:.2f}%", na_rep="")  # Fill NaNs with blank
         .applymap(lambda v: "color: green" if v > 0 else "color: red")
     )
 
