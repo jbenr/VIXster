@@ -497,18 +497,27 @@ with tabs[2]:
     # ─── 4) Strategy‐level Monthly & Yearly Returns ────────────────────────────────
     df_monthly = (
         df.set_index("Date")
-          .resample("ME")
-          .agg({
-              "Start NAV": "first",
-              "End NAV":   "last",
-              "Net Inflow": "sum"
-          })
+        .resample("M")  # month-end
+        .agg({
+            "Start NAV": "first",
+            "End NAV": "last",
+            "Net Inflow": "sum"
+        })
     )
-    df_monthly["MonthlyReturn"] = (
-        (df_monthly["End NAV"] - df_monthly["Start NAV"] - df_monthly["Net Inflow"])
-        / df_monthly["Start NAV"]
-    ) * 100
-    df_monthly.index = df_monthly.index.strftime("%b %y")
+    df_monthly["MonthlyReturn"] = ((df_monthly["End NAV"] - df_monthly["Start NAV"] - df_monthly["Net Inflow"])
+                                   / df_monthly["Start NAV"]) * 100
+
+    df_monthly["Year"] = df_monthly.index.year
+    df_monthly["Month"] = df_monthly.index.strftime("%b")
+    df_returns_pivot = df_monthly.pivot_table(
+        index="Year",
+        columns="Month",
+        values="MonthlyReturn",
+        aggfunc="first"
+    )
+
+    month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    df_returns_pivot = df_returns_pivot.reindex(columns=month_order)
 
     df_yearly = (
         df.set_index("Date")
@@ -526,12 +535,16 @@ with tabs[2]:
     df_yearly.index = df_yearly.index.year
 
     st.subheader("Strategy Returns")
+
+    # ─── Display with formatting ────────────────────────────────────────────────
+    st.subheader("Strategy Returns")
+
     st.table(
-        df_monthly[["MonthlyReturn"]]
-        .T
-        .style.map(lambda v: "color: green" if v > 0 else "color: red")
+        df_returns_pivot.style
         .format("{:.2f}%")
+        .applymap(lambda v: "color: green" if v > 0 else "color: red")
     )
+
     st.table(
         df_yearly[["YearlyReturn"]]
         .T
