@@ -472,15 +472,18 @@ with tabs[2]:
     #    • Else if "data/performance.parquet" exists, load df from disk.
     #    • Otherwise stop and ask the user to refresh.
     # ------------------------------------------------------
-    if "perf_df" in st.session_state:
-        df = st.session_state["perf_df"]
-    elif os.path.exists("data/performance.parquet"):
-        df = pd.read_parquet("data/performance.parquet")
-        df["Date"] = pd.to_datetime(df["Date"])
-        df = df.sort_values("Date").reset_index(drop=True)
-    else:
-        st.warning("No performance data found. Click “Refresh NAV Data” to pull the latest.")
-        st.stop()
+    if "perf_df" not in st.session_state or "investor_results" not in st.session_state:
+        try:
+            df, investor_results = pull_performance(out_parquet="data/performance.parquet")
+            st.session_state["perf_df"] = df
+            st.session_state["investor_results"] = investor_results
+        except Exception as e:
+            st.warning(f"Could not load performance data: {e}")
+            st.stop()
+
+    df = st.session_state["perf_df"]
+    investor_results = st.session_state["investor_results"]
+
 
     # ------------------------------------------------------
     # 3) Decide where to get investor_results from:
@@ -497,7 +500,7 @@ with tabs[2]:
     # ─── 4) Strategy‐level Monthly & Yearly Returns ────────────────────────────────
     df_monthly = (
         df.set_index("Date")
-        .resample("M")  # month-end
+        .resample("ME")  # month-end
         .agg({
             "Start NAV": "first",
             "End NAV": "last",
@@ -536,13 +539,10 @@ with tabs[2]:
 
     st.subheader("Strategy Returns")
 
-    # ─── Display with formatting ────────────────────────────────────────────────
-    st.subheader("Strategy Returns")
-
     st.table(
         df_returns_pivot.style
         .format("{:.2f}%", na_rep="")  # Fill NaNs with blank
-        .applymap(lambda v: "color: green" if v > 0 else "color: red")
+        .map(lambda v: "color: green" if v > 0 else "color: red")
     )
 
     st.table(
@@ -615,7 +615,7 @@ with tabs[2]:
                     "PnL":                "${:,.2f}",
                     "Returns %":          "{:.2f}%"
                 })
-                .applymap(lambda v: "color: green" if v > 0 else "color: red", subset=["PnL", "Returns %"])
+                .map(lambda v: "color: green" if v > 0 else "color: red", subset=["PnL", "Returns %"])
             )
     else:
         st.info("Investor details not yet populated. Click “Refresh NAV Data” to fetch investor info.")
