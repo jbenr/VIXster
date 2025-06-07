@@ -134,6 +134,7 @@ with tabs[0]:
     else:
         st.info("No spread data loaded yet.")
 
+    st.markdown("<hr style='margin-top: 1em; margin-bottom: 1em;'>", unsafe_allow_html=True)
     # 4) Historical data
     col1, col2 = st.columns(2)
 
@@ -197,24 +198,7 @@ with tabs[0]:
                 st.success("Data updated successfully!")
             except Exception as e:
                 st.error(f"Data update failed with error:\n{e}")
-        #     cmd = [
-        #         "conda", "run", "-n", "algo",
-        #         "bash", "-c",
-        #         "python update_data.py"
-        #     ]
-        #     result = subprocess.run(cmd, capture_output=True, text=True)
-        #
-        # if result.returncode == 0:
-        #     st.success("Data updated successfully!")
-        # else:
-        #     st.error(f"Data update failed with return code {result.returncode}")
-        #     if result.stderr:
-        #         st.write("**Script errors:**")
-        #         st.code(result.stderr)
-        #
-        # if result.stdout:
-        #     st.write("**Script output:**")
-        #     st.code(result.stdout)
+
 
 # ------------------ MODEL TAB ------------------ #
 with tabs[1]:
@@ -432,7 +416,7 @@ with tabs[1]:
                         else:
                             color = "gray"
                         z_scores.append({"Spread": spread, "Z_Score": z_val, "Color": color})
-                zscore_df = pd.DataFrame(z_scores)
+                zscore_df = pd.DataFrame(z_scores)*-1
 
                 bar_z = alt.Chart(zscore_df).mark_bar().encode(
                     x=alt.X("Spread:N", title="Spread"),
@@ -447,6 +431,8 @@ with tabs[1]:
                 st.altair_chart(bar_resid, use_container_width=False)
                 st.altair_chart(bar_z, use_container_width=False)
                 st.altair_chart(chart, use_container_width=False)
+
+                st.markdown("<hr style='margin-top: 1em; margin-bottom: 1em;'>", unsafe_allow_html=True)
 
                 st.write("Historical Signals:")
                 st.dataframe(df_result.tail(50))
@@ -576,6 +562,7 @@ with tabs[2]:
     # st.line_chart(
     #     df.set_index("Date")[["CumulativeReturn"]].rename(columns={"CumulativeReturn": "% Return"})
     # )
+    st.markdown("<hr style='margin-top: 1em; margin-bottom: 1em;'>", unsafe_allow_html=True)
 
     # ─── 7) Investor Details (logo above each table, then separate st.table) ────
     st.subheader("The Gentlemen")
