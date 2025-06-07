@@ -93,12 +93,32 @@ with tabs[0]:
             st.error(f"Error reading {SPREAD_FILE}: {e}")
             st.stop()
 
-    # 2) Optional Refresh
-    if st.button("Refresh Spread File"):
-        try:
-            st.session_state["df_spread"] = load_spread_parquet()
-        except Exception as e:
-            st.error(f"Error reading {SPREAD_FILE}: {e}")
+    # Layout with columns
+    col1, col2, spacer = st.columns([1, 1, 2])
+
+    # 1) Refresh Spread File
+    with col1:
+        if st.button("Refresh Spread File"):
+            try:
+                st.session_state["df_spread"] = load_spread_parquet()
+            except Exception as e:
+                st.error(f"Error reading {SPREAD_FILE}: {e}")
+
+    # 2) IBKR Login Button
+    with col2:
+        if st.button("IBKR Login"):
+            try:
+                result = subprocess.run(
+                    ["bash", "/home/han/pod/VIXster/launch_ibkr.sh"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                # st.success("IBKR Gateway launched successfully!")
+                st.toast(result.stdout)
+            except subprocess.CalledProcessError as e:
+                st.error("Failed to launch IBKR Gateway.")
+                st.text(e.stderr)
 
     # 3) Display the table (if loaded)
     if "df_spread" in st.session_state and st.session_state["df_spread"] is not None:

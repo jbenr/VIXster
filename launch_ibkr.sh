@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# ~/bin/launch_ibkr.sh
+#set -xe
 
-set -xe  # echo each command, exit on errors
-
-# ─── Load ~/.env into the environment ───
+# Load env
 ENV_FILE="$HOME/pod/VIXster/.env"
 if [[ -f "$ENV_FILE" ]]; then
   set -o allexport
@@ -11,54 +9,41 @@ if [[ -f "$ENV_FILE" ]]; then
   set +o allexport
 fi
 
-# ─── 2. Validate presence of credentials ───
-: "${IB_USER:?❌ IB_USER is not set. Please add IB_USER=… to your .env}"
-: "${IB_PASS:?❌ IB_PASS is not set. Please add IB_PASS=… to your .env}"
+: "${IB_USER:?Missing IB_USER}"
+: "${IB_PASS:?Missing IB_PASS}"
 
-# ─── Clean up any stale Xvfb lock on :1 ───
-LOCK="/tmp/.X1-lock"
-if [[ -e "$LOCK" ]]; then
-  echo "🗑 Removing stale lock $LOCK"
-  rm -f "$LOCK"
-fi
+IB_FOLDER="$HOME/Jts/ibgateway/1030"
+LOGFILE="$IB_FOLDER/ibgw.log"
 
-# ─── Start Xvfb with GLX support on display :1 ───
-Xvfb :1 -ac -screen 0 1024x768x24 &
-XVFB_PID=$!
-
-export DISPLAY=:1
+# Graphics/env fixes
+unset JAVA_TOOL_OPTIONS
 export LIBGL_ALWAYS_SOFTWARE=1
-export JAVA_TOOL_OPTIONS="-Dprism.order=sw"
+export GALLIUM_DRIVER=softpipe
+export MESA_GL_VERSION_OVERRIDE=3.0
+export MESA_GLSL_VERSION_OVERRIDE=130
+export JAVA_TOOL_OPTIONS="-Dprism.verbose=true -Dprism.order=sw -Dprism.text=t2k"
 
+# Start Xvfb FIRST
+#pkill -f "Xvfb :99" || true
+#rm -f /tmp/.X99-lock
+
+Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
+XVFB_PID=$!
+export DISPLAY=:99
 sleep 2
 
-# ─── Launch IB Gateway ───
-~/Jts/ibgateway/1030/ibgateway &
+# Start IB Gateway
+"$IB_FOLDER/ibgateway" > "$LOGFILE" 2>&1 &
 IBGW_PID=$!
+echo "🚀 Launched IB Gateway (PID $IBGW_PID), DISPLAY $DISPLAY"
 
-# ─── Wait for any window with “Gateway” in its title ───
-for i in {1..15}; do
-  WIDS=$(xdotool search --onlyvisible --name "Gateway")
-  if [[ -n "$WIDS" ]]; then
-    WID=$(echo "$WIDS" | head -n1)
-    echo "✅ Found IB Gateway window: $WID"
-    break
-  fi
-  sleep 1
-done
+# Wait for GUI to be up
+sleep 5
 
-if [[ -z "$WID" ]]; then
-  echo "❌ Couldn’t find the IB Gateway window. Exiting."
-  kill $IBGW_PID $XVFB_PID
-  exit 1
-fi
+# Inject keystrokes
+xdotool type "$IB_USER"
+xdotool key Tab
+xdotool type "$IB_PASS"
+xdotool key Return
 
-# ─── Type credentials directly into that window ───
-xdotool type  --delay 5 --window "$WID" "$IB_USER"
-xdotool key   --window "$WID" Tab
-xdotool type  --delay 5 --window "$WID" "$IB_PASS"
-xdotool key   --window "$WID" Return
-
-# ─── Wait for Gateway to exit, then clean up Xvfb ───
-wait $IBGW_PID
-kill $XVFB_PID
+echo "✅ Sent login keystrokes to IB Gateway window."
