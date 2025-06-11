@@ -35,7 +35,7 @@ tmux send-keys -t $SESSION:1 "tailscale funnel 8501" C-m
 ## Launch IBController and IB Gateway
 #tmux send-keys -t $SESSION:2 "~/ibc/gatewaystart.sh" C-m
 
-# -------------------- Window 4: Tailscale + Funnel --------------------
+# -------------------- Window 3: Tailscale + Funnel --------------------
 tmux new-window -t $SESSION -n streamer
 tmux send-keys -t $SESSION:2 "conda activate sheet" C-m
 tmux send-keys -t $SESSION:2 "cd ~/pod/VIXster" C-m

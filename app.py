@@ -116,8 +116,21 @@ with tabs[0]:
                 )
                 # st.success("IBKR Gateway launched successfully!")
                 st.toast(result.stdout)
+
             except subprocess.CalledProcessError as e:
                 st.error("Failed to launch IBKR Gateway.")
+                st.text(e.stderr)
+            utils.oh_waiter(10, "waiting for IBKR login!")
+            try:
+                result2 = subprocess.run(
+                    ["bash", "/home/han/pod/VIXster/restart_streamer.sh"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                st.toast(result2.stdout)
+            except subprocess.CalledProcessError as e:
+                st.error("Failed to relaunch spread streamer.")
                 st.text(e.stderr)
 
     # 3) Display the table (if loaded)
