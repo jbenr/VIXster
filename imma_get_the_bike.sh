@@ -23,23 +23,15 @@ tmux send-keys -t $SESSION:1 "sleep 3" C-m
 tmux send-keys -t $SESSION:1 "tailscale funnel 8501" C-m
 
 ## -------------------- Window 2: IB Gateway (IBKR) --------------------
-#tmux new-window -t $SESSION -n ibkr
-#
-## Start Xvfb virtual display
-#tmux send-keys -t $SESSION:2 "Xvfb :1 -ac -screen 0 1024x768x24 &" C-m
-#tmux send-keys -t $SESSION:2 "export DISPLAY=:1" C-m
-#
-## Optional: Add a 2-second delay to ensure Xvfb is up
-#tmux send-keys -t $SESSION:2 "sleep 2" C-m
-#
-## Launch IBController and IB Gateway
-#tmux send-keys -t $SESSION:2 "~/ibc/gatewaystart.sh" C-m
+tmux new-window -t $SESSION -n ibkr
+tmux send-keys -t $SESSION:2 "./pod/VIXster/launch_ibkr.sh" C-m
+tmux send-keys -t $SESSION:2 "sleep 10" C-m
 
 # -------------------- Window 3: Tailscale + Funnel --------------------
 tmux new-window -t $SESSION -n streamer
-tmux send-keys -t $SESSION:2 "conda activate sheet" C-m
-tmux send-keys -t $SESSION:2 "cd ~/pod/VIXster" C-m
-tmux send-keys -t $SESSION:2 "python ibkr_stream_spreads.py" C-m
+tmux send-keys -t $SESSION:3 "conda activate sheet" C-m
+tmux send-keys -t $SESSION:3 "cd ~/pod/VIXster" C-m
+tmux send-keys -t $SESSION:3 "python ibkr_stream_spreads.py" C-m
 
 # -------------------- Attach to session --------------------
 tmux attach-session -t $SESSION

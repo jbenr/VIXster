@@ -122,6 +122,7 @@ def pull_performance(
     send_url = f"{base_url}/SendRequest?t={token}&q={queryId}&v=3"
     resp = requests.get(send_url)
     resp.raise_for_status()
+    # utils.oh_waiter(3, "IBKR flex query")
 
     root = ET.fromstring(resp.text)
     ref_elem = root.find("ReferenceCode")
