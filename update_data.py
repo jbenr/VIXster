@@ -178,6 +178,17 @@ def pull_performance(
 
     # ─── D) Save daily NAV DataFrame to disk (so Streamlit can read it) ────────────
 
+    # Load old data if exists
+    if os.path.exists(out_parquet):
+        old_df = pd.read_parquet(out_parquet)
+        # Ensure Date is datetime
+        old_df["Date"] = pd.to_datetime(old_df["Date"], errors="coerce")
+        # Outer concat + drop duplicates on Date
+        df = pd.concat([old_df, df], ignore_index=True)
+        df = df.drop_duplicates(subset=["Date"], keep="last")
+        df = df.sort_values("Date").reset_index(drop=True)
+
+    # Save daily NAV DataFrame to disk (so Streamlit can read it)
     os.makedirs(os.path.dirname(out_parquet), exist_ok=True)
     df.to_parquet(out_parquet, index=False)
 
@@ -212,7 +223,7 @@ def pull_performance(
     strategy_start_date = pd.to_datetime(datetime(2024, 8, 27))
     investors["Benjin"] = {
         "invest_date":        strategy_start_date.strftime("%Y-%m-%d"),
-        "initial_investment": benjin_initial,
+        "initial_investment": 10000,
         "logo_url":           "https://cdn.freebiesupply.com/images/large/2x/washington-redskins-logo-transparent.png",
         "logo_height":        50
     }
