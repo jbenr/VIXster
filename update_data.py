@@ -4,7 +4,54 @@ import pandas as pd
 import time, requests, os
 from datetime import datetime
 import xml.etree.ElementTree as ET
+from typing import Tuple, Dict
 
+
+# ───────────────────────────── helpers ─────────────────────────────
+
+def parse_flex_xml_to_df(xml_path: str) -> pd.DataFrame:
+    """
+    Parse an IBKR Flex 'Summary' XML into a DataFrame with columns:
+      ["Date", "Start NAV", "Net Inflow", "End NAV"]
+
+    Only keeps rows with Start NAV >= 100, sorts by Date ascending.
+    Raises RuntimeError if the file does not exist or no rows parsed.
+    """
+    if not os.path.exists(xml_path):
+        raise RuntimeError(f"XML file not found: {xml_path}")
+
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    rows = []
+    for stmt in root.iter("FlexStatement"):
+        date_str = stmt.get("fromDate")  # e.g., "2025-06-03"
+        change_nav = stmt.find("ChangeInNAV")
+        if change_nav is None:
+            continue
+
+        start_nav = float(change_nav.get("startingValue", 0) or 0)
+        net_inflow = float(change_nav.get("depositsWithdrawals", 0) or 0)
+        end_nav = float(change_nav.get("endingValue", 0) or 0)
+
+        rows.append([date_str, start_nav, net_inflow, end_nav])
+
+    if not rows:
+        raise RuntimeError(f"No <FlexStatement> rows found in {xml_path}.")
+
+    df = pd.DataFrame(rows, columns=["Date", "Start NAV", "Net Inflow", "End NAV"])
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
+
+    # Filter tiny NAVs
+    df = df[df["Start NAV"] >= 100].copy()
+    if df.empty:
+        raise RuntimeError(f"No valid NAV rows remain after filtering in {xml_path}.")
+
+    return df
+
+
+# ───────────────────────────── existing flows ─────────────────────────────
 
 def run():
     vixy.pull_vix(vix_futures_exp_dates.run_over_time_frame(2013))
@@ -52,40 +99,26 @@ def live():
 
     # utils.pdf(vix.tail(10))
 
+
+# ───────────────────────────── performance ─────────────────────────────
+
 def pull_performance(
     out_parquet: str = "data/performance.parquet"
-) -> tuple[pd.DataFrame, dict]:
+) -> Tuple[pd.DataFrame, Dict]:
     """
     1) Downloads the latest Summ.xml from IBKR Flex WebService.
-    2) Parses each <FlexStatement> into daily NAV rows.
-    3) Computes Cumulative NAV for each date.
-    4) Defines an `investors` dictionary up top; each key (except 'Benjin')
-       must have: invest_date (YYYY-MM-DD), initial_investment (float), strike (float),
-       plus a logo_url and logo_height for display.
-    5) Calculates each non-Benjin investor’s ownership_pct = initial_investment / strike.
-    6) Computes total_inflows, then:
-         • Benjin’s initial_investment = total_inflows − sum_of_all_other_initials
-         • Benjin’s ownership_pct = 1 − sum_of_all_other_ownerships
-         • Benjin’s logo_url & logo_height can be supplied here as well.
-    7) Builds a column "<Name> NAV Share" = ownership_pct * End NAV for each investor
-    8) Computes current_value, pnl, return_pct for each investor
-    9) Saves daily NAV DataFrame (with all "<Name> NAV Share" columns) to out_parquet
-    10) Returns (df, investor_results)
+    2) Parses each <FlexStatement> into daily NAV rows (via parse_flex_xml_to_df).
+    3) ALSO parses data/starting_dataer.xml (if present) and merges rows.
+    4) Saves merged daily NAV DataFrame to out_parquet.
+    5) Defines investors (non-Benjin) and computes ownership %.
+    6) Sets Benjin as the leftover ownership & initial capital (first Start NAV).
+    7) Builds "<Name> NAV Share" columns; computes current_value, pnl, return_pct.
+    8) Returns (df, investor_results)
 
-    To add a new investor, simply insert them (with invest_date, initial_investment,
-    strike, logo_url, logo_height) into the `investors` dict below. Everything else adapts automatically.
-
-    Raises RuntimeError if the Flex WebService fails or if no valid NAV rows remain.
+    To add a new investor, insert them in the `investors` dict below.
     """
 
     # ─── 0) DEFINE YOUR INVESTORS HERE (except Benjin) ────────────────────────────
-    # Format: "Name": {
-    #     "invest_date": "YYYY-MM-DD",
-    #     "initial_investment": float,
-    #     "strike": float,
-    #     "logo_url": str,        # URL to the investor’s logo
-    #     "logo_height": int      # desired height when showing the logo
-    # }
     investors = {
         "Chuck": {
             "invest_date":        "2024-03-06",
@@ -101,7 +134,7 @@ def pull_performance(
             "logo_url":           "https://images.squarespace-cdn.com/content/v1/57c489118419c295dde4c84a/1495392731348-WRZNA4R1PB910OA70Q3D/peter-luger-logo.jpg",
             "logo_height":        40
         },
-        # To add another investor (e.g. “Alice”), copy/paste below:
+        # Example:
         # "Alice": {
         #     "invest_date":        "2024-07-01",
         #     "initial_investment": 5000.0,
@@ -110,10 +143,8 @@ def pull_performance(
         #     "logo_height":        40
         # },
     }
-    # ──────────────────────────────────────────────────────────────────────────────
 
-    # ─── A) Download Summ.xml from IBKR FlexWebService ─────────────────────────────
-
+    # ─── A) Download Summ.xml from IBKR FlexWebService ────────────────────────────
     token = "154979803551046183567560"
     queryId = "1155973"
     base_url = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
@@ -122,7 +153,6 @@ def pull_performance(
     send_url = f"{base_url}/SendRequest?t={token}&q={queryId}&v=3"
     resp = requests.get(send_url)
     resp.raise_for_status()
-    # utils.oh_waiter(3, "IBKR flex query")
 
     root = ET.fromstring(resp.text)
     ref_elem = root.find("ReferenceCode")
@@ -146,57 +176,28 @@ def pull_performance(
     else:
         raise RuntimeError("Flex Statement never became ready after 10 attempts.")
 
-    # ─── B) Parse Summ.xml into daily NAV rows ────────────────────────────────────
+    # ─── B) Parse both XMLs, merge, save ──────────────────────────────────────────
+    df_main = parse_flex_xml_to_df(summ_path)
 
-    tree = ET.parse(summ_path)
-    root = tree.getroot()
+    # Optional seed file to prepend/merge historical rows
+    starting_xml_path = "data/starting_dataer.xml"
+    if os.path.exists(starting_xml_path):
+        df_start = parse_flex_xml_to_df(starting_xml_path)
+        # Merge: concat, dedupe by Date (keep LAST so the latest download wins if same date)
+        df = pd.concat([df_start, df_main], ignore_index=True)
+        df = df.sort_values("Date")
+        df = df.drop_duplicates(subset=["Date"], keep="last").reset_index(drop=True)
+    else:
+        df = df_main
 
-    rows = []
-    for stmt in root.iter("FlexStatement"):
-        date_str = stmt.get("fromDate")  # e.g. "2025-06-03"
-        change_nav = stmt.find("ChangeInNAV")
-        if change_nav is None:
-            continue
-
-        start_nav = float(change_nav.get("startingValue", 0))
-        net_inflow = float(change_nav.get("depositsWithdrawals", 0))
-        end_nav = float(change_nav.get("endingValue", 0))
-        rows.append([date_str, start_nav, net_inflow, end_nav])
-
-    if not rows:
-        raise RuntimeError("No <FlexStatement> rows found in Summ.xml.")
-
-    df = pd.DataFrame(rows, columns=["Date", "Start NAV", "Net Inflow", "End NAV"])
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
-
-    # ─── C) Filter tiny NAVs ─────────────────────────────
-
-    df = df[df["Start NAV"] >= 100]
-    if df.empty:
-        raise RuntimeError("No valid NAV rows remain after dropping small NAVs.")
-
-    # ─── D) Save daily NAV DataFrame to disk (so Streamlit can read it) ────────────
-
-    # Load old data if exists
-    if os.path.exists(out_parquet):
-        old_df = pd.read_parquet(out_parquet)
-        # Ensure Date is datetime
-        old_df["Date"] = pd.to_datetime(old_df["Date"], errors="coerce")
-        # Outer concat + drop duplicates on Date
-        df = pd.concat([old_df, df], ignore_index=True)
-        df = df.drop_duplicates(subset=["Date"], keep="last")
-        df = df.sort_values("Date").reset_index(drop=True)
-
-    # Save daily NAV DataFrame to disk (so Streamlit can read it)
+    # Persist merged daily NAV DataFrame for Streamlit
     os.makedirs(os.path.dirname(out_parquet), exist_ok=True)
     df.to_parquet(out_parquet, index=False)
 
-    # ─── E) Compute each non-Benjin investor’s ownership_pct ──────────────────────
-
+    # ─── C) Compute each non-Benjin investor’s ownership_pct ─────────────────────
     sum_of_initials = 0.0
     sum_of_ownerships = 0.0
-    ownership_map = {}  # name -> ownership_pct
+    ownership_map: Dict[str, float] = {}
 
     for name, info in investors.items():
         initial_cap = float(info["initial_investment"])
@@ -207,42 +208,37 @@ def pull_performance(
         sum_of_initials += initial_cap
         sum_of_ownerships += pct
 
-    # ─── F) Now define Benjin as the “leftover” investor ─────────────────────────
-
-    # Benjin’s initial_investment = total_inflows − sum_of_all_other_initials
-    benjin_initial = df.iloc[0]['Start NAV']
+    # ─── D) Define Benjin as leftover investor ───────────────────────────────────
+    benjin_initial = float(df.iloc[0]["Start NAV"])
     if benjin_initial < 0:
         raise RuntimeError(f"Leftover capital (for Benjin) is negative: {benjin_initial}")
 
-    # Benjin’s ownership_pct = 1 − sum_of_all_other_ownerships
     benjin_pct = 1.0 - sum_of_ownerships
     if benjin_pct < 0:
-        raise RuntimeError(f"Benjin’s ownership_pct is negative ({benjin_pct}). Check your strikes & investments.")
+        raise RuntimeError(f"Benjin’s ownership_pct is negative ({benjin_pct}). Check strikes & investments.")
 
-    # Add Benjin to the investors dictionary:
     strategy_start_date = pd.to_datetime(datetime(2024, 8, 27))
     investors["Benjin"] = {
         "invest_date":        strategy_start_date.strftime("%Y-%m-%d"),
-        "initial_investment": 10000,
+        "initial_investment": benjin_initial,
         "logo_url":           "https://cdn.freebiesupply.com/images/large/2x/washington-redskins-logo-transparent.png",
         "logo_height":        50
     }
     ownership_map["Benjin"] = benjin_pct
 
-    # ─── G) Build each investor’s "<Name> NAV Share" column & compute final stats ─
-
-    investor_results = {}
+    # ─── E) Build NAV Share columns & results ─────────────────────────────────────
+    investor_results: Dict[str, Dict] = {}
 
     for name, info in investors.items():
         invest_date = pd.to_datetime(info["invest_date"])
         initial_cap = float(info["initial_investment"])
         pct = ownership_map[name]
 
-        # 1) Create "<Name> NAV Share" column = pct * End NAV
+        # 1) "<Name> NAV Share"
         df[f"{name} NAV Share"] = pct * df["End NAV"]
 
-        # 2) Current value = last row of "<Name> NAV Share"
-        current_val = df[f"{name} NAV Share"].iloc[-1]
+        # 2) Current value, PnL, return %
+        current_val = float(df[f"{name} NAV Share"].iloc[-1])
         pnl = current_val - initial_cap
         return_pct = (pnl / initial_cap) * 100 if initial_cap != 0 else 0.0
 
@@ -254,7 +250,7 @@ def pull_performance(
             "pnl":                pnl,
             "return_pct":         return_pct,
             "logo_url":           info.get("logo_url", ""),
-            "logo_height":        info.get("logo_height", 40)
+            "logo_height":        info.get("logo_height", 40),
         }
 
     return df, investor_results
@@ -269,4 +265,4 @@ if __name__ == '__main__':
     perf = pull_performance()
     utils.pdf(perf[0])
     for key in perf[1]:
-        print(key,perf[1][key])
+        print(key, perf[1][key])
