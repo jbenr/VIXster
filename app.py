@@ -392,7 +392,7 @@ with tabs[1]:
 
                 df_display = (
                     df_display
-                    .map(lambda x: f"{x:.2f}" if isinstance(x, (int, float, np.integer, np.floating)) else str(x))
+                    .map(lambda x: f"{x:.2f}" if isinstance(x, (float, np.floating)) else str(x))
                     .astype(str)
                 )
 
