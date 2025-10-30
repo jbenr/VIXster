@@ -345,7 +345,6 @@ with tabs[1]:
                     "Z": {},
                     "Signal": {},
                     "Vol": {},
-                    "VolFactor": {},
                     "Contracts": {}
                 }
 
