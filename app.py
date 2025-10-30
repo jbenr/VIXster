@@ -326,14 +326,17 @@ with tabs[1]:
                 inv_front = _inv(vols_last.get(front_spread, np.nan))
                 contracts_all = {}
                 for s in target_spreads:
+                    print(s)
                     inv_s = _inv(vols_last.get(s, np.nan))
                     # scale relative to 2-3; round to int; min 1 if finite, else 0
                     if inv_front > 0 and inv_s > 0:
                         size = int(round(max(1 if s == front_spread else 0, inv_s / inv_front)))
                     else:
                         size = 0 if s != front_spread else 1  # graceful fallback
+                    print(size)
                     contracts_all[s] = size
                 # (If you prefer 2-3=1 and allow others to be 0 only when data missing, above does that.)
+                print(contracts_all)
 
                 output_dict = {
                     "Actual": {},
