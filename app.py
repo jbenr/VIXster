@@ -309,7 +309,7 @@ with tabs[1]:
             output_rows = []
 
             # ---- use 1-2 as the base for vol factors ----
-            base_spread = "1-2"
+            base_spread = "2-3"
 
             # infer per-spread realized vols from the last signal row
             vols_last = _infer_vols_from_signal_row(signal.iloc[0], target_spreads)  # dict: spread -> vol
