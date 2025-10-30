@@ -265,226 +265,256 @@ with tabs[1]:
     def _inv(v):
         return 0.0 if v is None or pd.isna(v) or v <= 0 else 1.0 / v
 
-    # Button to compute live signal.
+
     if st.button("Run Modelo"):
-        try:
+        # Helper: unified context manager for status/spinner depending on Streamlit version
+        from contextlib import contextmanager
+
+
+        @contextmanager
+        def status_ctx(label: str):
             try:
-                df = load_data(live=True)
-            except Exception as e:
-                st.error(e)
-                df = load_data()
+                # Streamlit 1.31+ has st.status
+                st_status = st.status(label, expanded=True)
+                with st_status:
+                    yield st_status  # caller can .update(...)
+                    st_status.update(label="Done ✅", state="complete")
+            except Exception:
+                # Fallback for older versions
+                with st.spinner(label):
+                    class _Dummy:
+                        def update(self, *args, **kwargs): pass
 
-            utils.pdf(df.tail(10))
-            df_data = feature_engineer(df)
+                    yield _Dummy()
 
-            target_spreads = [f"{i}-{i + 1}" for i in range(1, 8)][1:]
-            model_paths = {spread: f"data/models/linear_model_{spread}.pkl" for spread in target_spreads}
 
-            best_feats = pd.read_parquet('data/optimal_models.parquet')
-            maximizing_by = 'DirectionalAcc'
-            feature_cols_dict = {
-                spread: list(best_feats[best_feats['Spread'] == spread].loc[
-                                 best_feats[best_feats['Spread'] == spread][maximizing_by].idxmax()
-                             ]['SubsetBlocks'])
-                for spread in target_spreads
-            }
-            models = load_models(model_paths)
+        try:
+            with status_ctx("Running Modelo…") as status:
+                status.update(label="Loading data…", state="running")
+                try:
+                    df = load_data(live=True)
+                except Exception as e:
+                    st.error(e)
+                    df = load_data()
 
-            df_preds = generate_all_predictions(models, df_data, feature_cols_dict)
-            df_result = ranked_strategy_vol_adjusted(
-                df_preds, target_spreads, vol_lookback=60, z_lookback=30, z_thresh=1.0, exit_z_thresh=0.25)
+                utils.pdf(df.tail(10))
 
-            signal = df_result.tail(1)
-            signal_date = signal.index[0] if hasattr(signal.index, '__getitem__') else None
+                status.update(label="Feature engineering…", state="running")
+                df_data = feature_engineer(df)
 
-            if signal is not None:
-                if signal_date is not None:
-                    st.subheader(f"Signal {signal_date.strftime('%Y-%m-%d')}")
-                else:
-                    st.subheader("Signal")
-                output_rows = []
+                status.update(label="Loading models & best features…", state="running")
+                target_spreads = [f"{i}-{i + 1}" for i in range(1, 8)][1:]
+                model_paths = {spread: f"data/models/linear_model_{spread}.pkl" for spread in target_spreads}
 
-                # Check if a trade is signaled.
-                if signal["Trade"].values[0] in [True, "TRUE", "True"]:
-                    weight_long = signal["Weight_Long"].values[0]
-                    weight_short = signal["Weight_Short"].values[0]
-                    # Scale such that the smaller weight becomes 1 contract.
-                    long_contracts, short_contracts = compute_contracts(weight_long, weight_short, tol=0.1)
-                    # Also capture the designated long and short spreads.
-                    long_spread = signal["LongSpread"].values[0]
-                    short_spread = signal["ShortSpread"].values[0]
-                else:
-                    # No trade: nothing to scale.
-                    long_contracts = None
-                    short_contracts = None
-                    long_spread = None
-                    short_spread = None
-
-                # -------- NEW: contracts for ALL spreads scaled by front (2-3) = 1 --------
-                front_spread = "2-3"
-                vols_last = _infer_vols_from_signal_row(signal.iloc[0], target_spreads)
-                inv_front = _inv(vols_last.get(front_spread, np.nan))
-                contracts_all = {}
-                for s in target_spreads:
-                    inv_s = _inv(vols_last.get(s, np.nan))
-                    # scale relative to 2-3; round to int; min 1 if finite, else 0
-                    if inv_front > 0 and inv_s > 0:
-                        size = int(round(max(1 if s == front_spread else 0, inv_s / inv_front)))
-                    else:
-                        size = 0 if s != front_spread else 1  # graceful fallback
-                    contracts_all[s] = size
-                # (If you prefer 2-3=1 and allow others to be 0 only when data missing, above does that.)
-                print(contracts_all)
-
-                output_dict = {
-                    "Actual": {},
-                    "Pred": {},
-                    "Resid": {},
-                    "Z": {},
-                    "Signal": {},
-                    "Contracts": {}
+                best_feats = pd.read_parquet('data/optimal_models.parquet')
+                maximizing_by = 'DirectionalAcc'
+                feature_cols_dict = {
+                    spread: list(best_feats[best_feats['Spread'] == spread].loc[
+                                     best_feats[best_feats['Spread'] == spread][maximizing_by].idxmax()
+                                 ]['SubsetBlocks'])
+                    for spread in target_spreads
                 }
+                models = load_models(model_paths)
 
-                for spread in target_spreads:
+                status.update(label="Scoring predictions…", state="running")
+                df_preds = generate_all_predictions(models, df_data, feature_cols_dict)
+
+                status.update(label="Building signal (vol/z thresholds)…", state="running")
+                df_result = ranked_strategy_vol_adjusted(
+                    df_preds, target_spreads, vol_lookback=60, z_lookback=30, z_thresh=1.0, exit_z_thresh=0.25)
+
+                status.update(label="Assembling tables & charts…", state="running")
+                signal = df_result.tail(1)
+                signal_date = signal.index[0] if hasattr(signal.index, '__getitem__') else None
+
+                if signal is not None:
+                    if signal_date is not None:
+                        st.subheader(f"Signal {signal_date.strftime('%Y-%m-%d')}")
+                    else:
+                        st.subheader("Signal")
+                    output_rows = []
+
+                    # Check if a trade is signaled.
                     if signal["Trade"].values[0] in [True, "TRUE", "True"]:
-                        if spread == long_spread:
-                            output_dict["Signal"][spread] = "Long"
-                            output_dict["Contracts"][spread] = round(long_contracts, 1)
-                        elif spread == short_spread:
-                            output_dict["Signal"][spread] = "Short"
-                            output_dict["Contracts"][spread] = round(short_contracts, 1)
+                        weight_long = signal["Weight_Long"].values[0]
+                        weight_short = signal["Weight_Short"].values[0]
+                        # Scale such that the smaller weight becomes 1 contract.
+                        long_contracts, short_contracts = compute_contracts(weight_long, weight_short, tol=0.1)
+                        # Also capture the designated long and short spreads.
+                        long_spread = signal["LongSpread"].values[0]
+                        short_spread = signal["ShortSpread"].values[0]
+                    else:
+                        # No trade: nothing to scale.
+                        long_contracts = None
+                        short_contracts = None
+                        long_spread = None
+                        short_spread = None
+
+                    # -------- contracts for ALL spreads scaled by front (2-3) = 1 --------
+                    import numpy as np
+
+
+                    def _inv(v):
+                        return 0.0 if v is None or pd.isna(v) or v <= 0 else 1.0 / v
+
+
+                    def _infer_vols_from_signal_row(signal_row, target_spreads):
+                        vols = {}
+                        for s in target_spreads:
+                            pred = signal_row.get(f"Pred_{s}")
+                            spot = signal_row.get(f"Spread_{s}")
+                            z = signal_row.get(f"Z_{s}")
+                            if z is None or pd.isna(z) or z == 0 or pred is None or pd.isna(
+                                    pred) or spot is None or pd.isna(spot):
+                                vols[s] = np.nan
+                            else:
+                                vols[s] = abs((pred - spot) / z)
+                        return vols
+
+
+                    front_spread = "2-3"
+                    vols_last = _infer_vols_from_signal_row(signal.iloc[0], target_spreads)
+                    inv_front = _inv(vols_last.get(front_spread, np.nan))
+                    contracts_all = {}
+                    for s in target_spreads:
+                        inv_s = _inv(vols_last.get(s, np.nan))
+                        if inv_front > 0 and inv_s > 0:
+                            size = int(round(max(1 if s == front_spread else 0, inv_s / inv_front)))
+                        else:
+                            size = 0 if s != front_spread else 1
+                        contracts_all[s] = size
+
+                    output_dict = {
+                        "Actual": {},
+                        "Pred": {},
+                        "Resid": {},
+                        "Z": {},
+                        "Signal": {},
+                        "Contracts": {}
+                    }
+
+                    for spread in target_spreads:
+                        if signal["Trade"].values[0] in [True, "TRUE", "True"]:
+                            if spread == long_spread:
+                                output_dict["Signal"][spread] = "Long"
+                                output_dict["Contracts"][spread] = round(long_contracts, 1)
+                            elif spread == short_spread:
+                                output_dict["Signal"][spread] = "Short"
+                                output_dict["Contracts"][spread] = round(short_contracts, 1)
+                            else:
+                                output_dict["Signal"][spread] = ""
+                                output_dict["Contracts"][spread] = round(contracts_all[spread], 1)
                         else:
                             output_dict["Signal"][spread] = ""
-                            output_dict["Contracts"][spread] = round(contracts_all[spread],1)
-                    else:
-                        output_dict["Signal"][spread] = ""
-                        output_dict["Contracts"][spread] = ""
+                            output_dict["Contracts"][spread] = ""
 
-                    actual = signal[f"Spread_{spread}"].values[0]
-                    pred = signal[f"Pred_{spread}"].values[0]
-                    z = signal[f"Z_{spread}"].values[0]
-                    resid = pred - actual
+                        actual = signal[f"Spread_{spread}"].values[0]
+                        pred = signal[f"Pred_{spread}"].values[0]
+                        z = signal[f"Z_{spread}"].values[0]
+                        resid = pred - actual
 
-                    output_dict["Actual"][spread] = round(actual, 2)
-                    output_dict["Pred"][spread] = round(pred, 2)
-                    output_dict["Resid"][spread] = round(resid, 2)
-                    output_dict["Z"][spread] = round(z, 2)
+                        output_dict["Actual"][spread] = round(actual, 2)
+                        output_dict["Pred"][spread] = round(pred, 2)
+                        output_dict["Resid"][spread] = round(resid, 2)
+                        output_dict["Z"][spread] = round(z, 2)
 
-                df_display = pd.DataFrame(output_dict)
-                df_display = df_display.T  # Now rows are: Signal, Contracts, etc.
-
-                def highlight_signal_columns(col):
-                    signal = df_display.loc["Signal", col.name]
-                    if signal == "Long":
-                        return ["background-color: #154734"] * len(col)  # Pale Green
-                    elif signal == "Short":
-                        return ["background-color: #9e1b32"] * len(col)  # Light Coral
-                    else:
-                        return [""] * len(col)
+                    df_display = pd.DataFrame(output_dict)
+                    df_display = df_display.T  # Now rows are: Signal, Contracts, etc.
 
 
-                df_display = (
-                    df_display
-                    .map(lambda x: f"{x:.2f}"
-                    if isinstance(x, (int, float, np.integer, np.floating, np.number))
-                    else str(x))
-                    .astype(str)
-                )
-
-                styled_df = df_display.style.apply(highlight_signal_columns, axis=0)
-                st.table(styled_df)
-
-                # Line Chart: Actual vs. Predicted Spread Values
-                data = {"Spread": [], "Type": [], "Value": []}
-                for spread in target_spreads:
-                    # Make sure both columns exist in signal
-                    actual_col = f"Spread_{spread}"
-                    pred_col = f"Pred_{spread}"
-                    if actual_col in signal.columns and pred_col in signal.columns:
-                        actual_value = signal[actual_col].values[0]
-                        predicted_value = signal[pred_col].values[0]
-                        data["Spread"].extend([spread, spread])
-                        data["Type"].extend(["Actual", "Predicted"])
-                        data["Value"].extend([actual_value, predicted_value])
-                    else:
-                        st.warning(f"Columns for spread {spread} are not available in signal.")
-
-                df_plot = pd.DataFrame(data)
-
-                chart = alt.Chart(df_plot).mark_line(point=True).encode(
-                    x=alt.X("Spread:N", scale=alt.Scale(domain=target_spreads), title="Spread"),
-                    y=alt.Y("Value:Q", title="Spread Value"),
-                    color=alt.Color("Type:N", title="Series")
-                ).properties(
-                    title="Actual Spreads vs Predicted Spreads",
-                    width=800,
-                    height=300
-                )
-
-                # 2) Bar Chart: Net Residual per Spread (Actual - Prediction for today)
-                residuals = []
-                long_spread = signal["LongSpread"].values[0] if "LongSpread" in signal.columns else None
-                short_spread = signal["ShortSpread"].values[0] if "ShortSpread" in signal.columns else None
-                for spread in target_spreads:
-                    if f"Spread_{spread}" in signal.columns and f"Pred_{spread}" in signal.columns:
-                        resid = signal[f"Pred_{spread}"].values[0] - signal[f"Spread_{spread}"].values[0]
-                        # Set color: green if spread == long_spread; red if spread == short_spread; else gray.
-                        if spread == long_spread:
-                            color = "green"
-                        elif spread == short_spread:
-                            color = "red"
+                    def highlight_signal_columns(col):
+                        sig = df_display.loc["Signal", col.name]
+                        if sig == "Long":
+                            return ["background-color: #154734"] * len(col)  # Pale Green
+                        elif sig == "Short":
+                            return ["background-color: #9e1b32"] * len(col)  # Light Coral
                         else:
-                            color = "gray"
-                        residuals.append({"Spread": spread, "Residual": resid, "Color": color})
-                residual_df = pd.DataFrame(residuals)
+                            return [""] * len(col)
 
-                bar_resid = alt.Chart(residual_df).mark_bar().encode(
-                    x=alt.X("Spread:N", title="Spread"),
-                    y=alt.Y("Residual:Q", title="Net Residual"),
-                    color=alt.Color("Color:N", scale=None, title="Trade Side")
-                ).properties(
-                    width=500,
-                    height=400,
-                    title="Net Residual per Spread"
-                )
 
-                # CHART 3: Bar Chart for Z-Scores per Spread (Today's Data)
-                z_scores = []
-                for spread in target_spreads:
-                    if f"Z_{spread}" in signal.columns:
-                        z_val = signal[f"Z_{spread}"].values[0]
-                        if spread == long_spread:
-                            color = "green"
-                        elif spread == short_spread:
-                            color = "red"
+                    df_display = (
+                        df_display
+                        .map(lambda x: f"{x:.2f}" if isinstance(x, (
+                        int, float, np.integer, np.floating, np.number)) else str(x))
+                        .astype(str)
+                    )
+                    styled_df = df_display.style.apply(highlight_signal_columns, axis=0)
+                    st.table(styled_df)
+
+                    # -------- plots (unchanged) --------
+                    data = {"Spread": [], "Type": [], "Value": []}
+                    for spread in target_spreads:
+                        actual_col = f"Spread_{spread}"
+                        pred_col = f"Pred_{spread}"
+                        if actual_col in signal.columns and pred_col in signal.columns:
+                            actual_value = signal[actual_col].values[0]
+                            predicted_value = signal[pred_col].values[0]
+                            data["Spread"].extend([spread, spread])
+                            data["Type"].extend(["Actual", "Predicted"])
+                            data["Value"].extend([actual_value, predicted_value])
                         else:
-                            color = "gray"
-                        z_scores.append({"Spread": spread, "Z_Score": z_val, "Color": color})
-                zscore_df = pd.DataFrame(z_scores)
+                            st.warning(f"Columns for spread {spread} are not available in signal.")
+                    df_plot = pd.DataFrame(data)
 
-                bar_z = alt.Chart(zscore_df).mark_bar().encode(
-                    x=alt.X("Spread:N", title="Spread"),
-                    y=alt.Y("Z_Score:Q", title="Z-Score"),
-                    color=alt.Color("Color:N", scale=None, title="Trade Side")
-                ).properties(
-                    width=500,
-                    height=400,
-                    title="Z-Scores per Spread"
-                )
+                    chart = alt.Chart(df_plot).mark_line(point=True).encode(
+                        x=alt.X("Spread:N", scale=alt.Scale(domain=target_spreads), title="Spread"),
+                        y=alt.Y("Value:Q", title="Spread Value"),
+                        color=alt.Color("Type:N", title="Series")
+                    ).properties(title="Actual Spreads vs Predicted Spreads", width=800, height=300)
 
-                st.altair_chart(bar_resid, use_container_width=False)
-                st.altair_chart(bar_z, use_container_width=False)
-                st.altair_chart(chart, use_container_width=False)
+                    residuals = []
+                    long_spread = signal["LongSpread"].values[0] if "LongSpread" in signal.columns else None
+                    short_spread = signal["ShortSpread"].values[0] if "ShortSpread" in signal.columns else None
+                    for spread in target_spreads:
+                        if f"Spread_{spread}" in signal.columns and f"Pred_{spread}" in signal.columns:
+                            resid = signal[f"Pred_{spread}"].values[0] - signal[f"Spread_{spread}"].values[0]
+                            if spread == long_spread:
+                                color = "green"
+                            elif spread == short_spread:
+                                color = "red"
+                            else:
+                                color = "gray"
+                            residuals.append({"Spread": spread, "Residual": resid, "Color": color})
+                    residual_df = pd.DataFrame(residuals)
 
-                st.markdown("<hr style='margin-top: 1em; margin-bottom: 1em;'>", unsafe_allow_html=True)
+                    bar_resid = alt.Chart(residual_df).mark_bar().encode(
+                        x=alt.X("Spread:N", title="Spread"),
+                        y=alt.Y("Residual:Q", title="Net Residual"),
+                        color=alt.Color("Color:N", scale=None, title="Trade Side")
+                    ).properties(width=500, height=400, title="Net Residual per Spread")
 
-                st.write("Historical Signals:")
-                st.dataframe(df_result.tail(50))
+                    z_scores = []
+                    for spread in target_spreads:
+                        if f"Z_{spread}" in signal.columns:
+                            z_val = signal[f"Z_{spread}"].values[0]
+                            if spread == long_spread:
+                                color = "green"
+                            elif spread == short_spread:
+                                color = "red"
+                            else:
+                                color = "gray"
+                            z_scores.append({"Spread": spread, "Z_Score": z_val, "Color": color})
+                    zscore_df = pd.DataFrame(z_scores)
 
-                st.write("Latest Data:")
-                st.dataframe(df_data.tail(5))
-            else:
-                st.warning("No signal computed. Please check your data.")
+                    bar_z = alt.Chart(zscore_df).mark_bar().encode(
+                        x=alt.X("Spread:N", title="Spread"),
+                        y=alt.Y("Z_Score:Q", title="Z-Score"),
+                        color=alt.Color("Color:N", scale=None, title="Trade Side")
+                    ).properties(width=500, height=400, title="Z-Scores per Spread")
+
+                    st.altair_chart(bar_resid, use_container_width=False)
+                    st.altair_chart(bar_z, use_container_width=False)
+                    st.altair_chart(chart, use_container_width=False)
+
+                    st.markdown("<hr style='margin-top: 1em; margin-bottom: 1em;'>", unsafe_allow_html=True)
+
+                    st.write("Historical Signals:")
+                    st.dataframe(df_result.tail(50))
+
+                    st.write("Latest Data:")
+                    st.dataframe(df_data.tail(5))
+                else:
+                    st.warning("No signal computed. Please check your data.")
         except Exception as e:
             st.error(f"Error computing live signal: {e}")
 
