@@ -379,25 +379,23 @@ with tabs[1]:
                 df_display = pd.DataFrame(output_dict)
                 df_display = df_display.T  # Now rows are: Signal, Contracts, etc.
 
+                _signals_row = df_display.loc["Signal"].copy()
 
-                def highlight_signal_columns(col):
-                    sig = df_display.loc("Signal")[col.name] if callable(getattr(df_display, "loc", None)) else \
-                    df_display.loc["Signal", col.name]
+                def highlight_signal_columns(col: pd.Series):
+                    sig = _signals_row.get(col.name, "")
                     if sig == "Long":
-                        return ["background-color: #154734"] * len(col)  # Pale Green
+                        return ["background-color: #154734"] * len(col)  # green
                     elif sig == "Short":
-                        return ["background-color: #9e1b32"] * len(col)  # Light Coral
+                        return ["background-color: #9e1b32"] * len(col)  # red
                     else:
                         return [""] * len(col)
 
-
                 df_display = (
                     df_display
-                    .map(lambda x: f"{x:.2f}"
-                    if isinstance(x, (int, float, np.integer, np.floating, np.number))
-                    else str(x))
+                    .map(lambda x: f"{x:.2f}" if isinstance(x, (int, float, np.integer, np.floating)) else str(x))
                     .astype(str)
                 )
+
                 styled_df = df_display.style.apply(highlight_signal_columns, axis=0)
                 st.table(styled_df)
 
