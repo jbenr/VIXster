@@ -24,6 +24,7 @@ tmux send-keys -t $SESSION:1 "tailscale funnel 8501" C-m
 
 ## -------------------- Window 2: IB Gateway (IBKR) --------------------
 tmux new-window -t $SESSION -n ibkr
+tmux send-keys -t $SESSION:0 "conda activate algo" C-m
 tmux send-keys -t $SESSION:2 "./pod/VIXster/launch_ibkr.sh" C-m
 tmux send-keys -t $SESSION:2 "sleep 10" C-m
 

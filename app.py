@@ -250,6 +250,21 @@ with tabs[1]:
                     return (rounded, x)  # (long_contracts, short_contracts)
                 x += 1
 
+    def _infer_vols_from_signal_row(signal_row, target_spreads):
+        vols = {}
+        for s in target_spreads:
+            pred = signal_row.get(f"Pred_{s}")
+            spot = signal_row.get(f"Spread_{s}")
+            z    = signal_row.get(f"Z_{s}")
+            if z is None or pd.isna(z) or z == 0 or pred is None or pd.isna(pred) or spot is None or pd.isna(spot):
+                vols[s] = np.nan
+            else:
+                vols[s] = abs((pred - spot) / z)
+        return vols
+
+    def _inv(v):
+        return 0.0 if v is None or pd.isna(v) or v <= 0 else 1.0 / v
+
     # Button to compute live signal.
     if st.button("Run Modelo"):
         try:
@@ -304,6 +319,21 @@ with tabs[1]:
                     short_contracts = None
                     long_spread = None
                     short_spread = None
+
+                # -------- NEW: contracts for ALL spreads scaled by front (2-3) = 1 --------
+                front_spread = "2-3"
+                vols_last = _infer_vols_from_signal_row(signal.iloc[0], target_spreads)
+                inv_front = _inv(vols_last.get(front_spread, np.nan))
+                contracts_all = {}
+                for s in target_spreads:
+                    inv_s = _inv(vols_last.get(s, np.nan))
+                    # scale relative to 2-3; round to int; min 1 if finite, else 0
+                    if inv_front > 0 and inv_s > 0:
+                        size = int(round(max(1 if s == front_spread else 0, inv_s / inv_front)))
+                    else:
+                        size = 0 if s != front_spread else 1  # graceful fallback
+                    contracts_all[s] = size
+                # (If you prefer 2-3=1 and allow others to be 0 only when data missing, above does that.)
 
                 output_dict = {
                     "Actual": {},
