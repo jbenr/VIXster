@@ -152,14 +152,19 @@ def display_loop(app):
                     ["Spread", "Contracts", "Months", "Bid Size", "Bid Price", "Ask Price", "Ask Size", "Last Update"]
                 ].sort_values("Spread").set_index("Spread")
 
-                # Print to console in place (optional):
                 sys.stdout.write("\033c")  # Clear screen
                 print("Live Spreads:\n")
                 print(tabulate(df, headers="keys", tablefmt=tabulate_formats[4]))
-                print(f"Last Update: {df['Last Update'].max()}")
+                if not df.empty and "Last Update" in df.columns:
+                    print(f"Last Update: {df['Last Update'].max()}")
 
-                # Save to parquet
-                df.reset_index().to_parquet(PARQUET_FILE, index=False)
+                cols = ["Bid Size", "Bid Price", "Ask Price", "Ask Size"]
+                num = df[cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+                has_any_nonzero = (num != 0).any().any()
+
+                if has_any_nonzero:
+                    df.reset_index().to_parquet(PARQUET_FILE, index=False)
 
 
 def run():

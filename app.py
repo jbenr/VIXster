@@ -308,34 +308,30 @@ with tabs[1]:
             # ======= your existing display code (unchanged except contracts_all present) =======
             output_rows = []
 
-            # Check if a trade is signaled.
-            if signal["Trade"].values[0] in [True, "TRUE", "True"]:
-                weight_long = signal["Weight_Long"].values[0]
-                weight_short = signal["Weight_Short"].values[0]
-                # Scale such that the smaller weight becomes 1 contract.
-                long_contracts, short_contracts = compute_contracts(weight_long, weight_short, tol=0.1)
-                # Also capture the designated long and short spreads.
-                long_spread = signal["LongSpread"].values[0]
-                short_spread = signal["ShortSpread"].values[0]
-            else:
-                # No trade: nothing to scale.
-                long_contracts = None
-                short_contracts = None
-                long_spread = None
-                short_spread = None
+            # ---- use 1-2 as the base for vol factors ----
+            base_spread = "1-2"
 
-            front_spread = "2-3"
-            vols_last = _infer_vols_from_signal_row(signal.iloc[0], target_spreads)
-            inv_front = _inv(vols_last.get(front_spread, np.nan))
+            # infer per-spread realized vols from the last signal row
+            vols_last = _infer_vols_from_signal_row(signal.iloc[0], target_spreads)  # dict: spread -> vol
+            vol_base = vols_last.get(base_spread, np.nan)
+
+            # VolFactor = Vol(base) / Vol(s), so base becomes 1.0
+            vol_factors = {}
+            for s in target_spreads:
+                v = vols_last.get(s, np.nan)
+                if (vol_base is not None and not pd.isna(vol_base) and vol_base > 0 and
+                        v is not None and not pd.isna(v) and v > 0):
+                    vol_factors[s] = vol_base / v
+                else:
+                    vol_factors[s] = np.nan
+
+            # Contracts row = VolFactor (so base = 1.0, others scale inversely with their vol)
             contracts_all = {}
             for s in target_spreads:
-                inv_s = _inv(vols_last.get(s, np.nan))
-                if inv_front > 0 and inv_s > 0:
-                    size = int(round(max(1 if s == front_spread else 0, inv_s / inv_front)))
-                else:
-                    size = 0 if s != front_spread else 1
-                contracts_all[s] = size
+                vf = vol_factors.get(s, np.nan)
+                contracts_all[s] = vf if (vf is not None and not pd.isna(vf)) else ""
 
+            # ======= display =======
             if signal is not None:
                 if signal_date is not None:
                     st.subheader(f"Signal {signal_date.strftime('%Y-%m-%d')}")
@@ -348,37 +344,46 @@ with tabs[1]:
                     "Resid": {},
                     "Z": {},
                     "Signal": {},
+                    "Vol": {},
+                    "VolFactor": {},
                     "Contracts": {}
                 }
 
+                # If there’s a trade, still label the long/short columns;
+                # Contracts row is now the vol-factor sizing (for all spreads).
+                is_trade = signal["Trade"].values[0] in [True, "TRUE", "True"]
+                long_spread = signal["LongSpread"].values[0] if is_trade else None
+                short_spread = signal["ShortSpread"].values[0] if is_trade else None
+
                 for spread in target_spreads:
-                    if signal["Trade"].values[0] in [True, "TRUE", "True"]:
+                    # Vol + VolFactor rows
+                    output_dict["Vol"][spread] = vols_last.get(spread, np.nan)
+                    output_dict["VolFactor"][spread] = vol_factors.get(spread, np.nan)
+
+                    # Signal labels
+                    if is_trade:
                         if spread == long_spread:
                             output_dict["Signal"][spread] = "Long"
-                            output_dict["Contracts"][spread] = int(long_contracts)
                         elif spread == short_spread:
                             output_dict["Signal"][spread] = "Short"
-                            output_dict["Contracts"][spread] = int(short_contracts)
                         else:
                             output_dict["Signal"][spread] = ""
-                            output_dict["Contracts"][spread] = int(contracts_all[spread])
                     else:
                         output_dict["Signal"][spread] = ""
-                        output_dict["Contracts"][spread] = ""
+
+                    output_dict["Contracts"][spread] = contracts_all[spread]
 
                     actual = signal[f"Spread_{spread}"].values[0]
                     pred = signal[f"Pred_{spread}"].values[0]
                     z = signal[f"Z_{spread}"].values[0]
                     resid = pred - actual
 
-                    output_dict["Actual"][spread] = round(actual, 2)
-                    output_dict["Pred"][spread] = round(pred, 2)
-                    output_dict["Resid"][spread] = round(resid, 2)
-                    output_dict["Z"][spread] = round(z, 2)
+                    output_dict["Actual"][spread] = actual
+                    output_dict["Pred"][spread] = pred
+                    output_dict["Resid"][spread] = resid
+                    output_dict["Z"][spread] = z
 
-                df_display = pd.DataFrame(output_dict)
-                df_display = df_display.T  # Now rows are: Signal, Contracts, etc.
-
+                df_display = pd.DataFrame(output_dict).T  # rows in the desired order already
                 _signals_row = df_display.loc["Signal"].copy()
 
                 def highlight_signal_columns(col: pd.Series):
@@ -390,13 +395,14 @@ with tabs[1]:
                     else:
                         return [""] * len(col)
 
-                df_display = (
+                # Pretty formatting: round floats to 2 decimals (your request)
+                df_display_fmt = (
                     df_display
-                    .map(lambda x: f"{x:.2f}" if isinstance(x, (float, np.floating)) else str(x))
-                    .astype(str)
+                    .applymap(lambda x: float(x) if isinstance(x, (np.floating, float, int, np.integer)) else x)
+                    .map(lambda x: f"{x:.2f}" if isinstance(x, (float, np.floating)) else ("" if x is None else str(x)))
                 )
 
-                styled_df = df_display.style.apply(highlight_signal_columns, axis=0)
+                styled_df = df_display_fmt.style.apply(highlight_signal_columns, axis=0)
                 st.table(styled_df)
 
                 # -------- your charts & tables below (unchanged) --------

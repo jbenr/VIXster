@@ -31,58 +31,22 @@ def generate_all_predictions(models, df_data, feature_cols_dict):
     return df_preds
 
 
-def front_idx(spread: str) -> int:
-    # "1-2" -> 1, "3-4" -> 3
-    return int(spread.split('-')[0])
-
-def inv_vol(x: float) -> float:
-    return 0.0 if (x is None or np.isnan(x) or x <= 0) else 1.0 / x
-
-def contracts_by_front(long_s: str,
-                       short_s: str,
-                       vols: dict[str, float],
-                       *,
-                       min_contract: int = 1,
-                       cap: int | None = None,
-                       all_spreads: list[str] | None = None) -> dict[str, int]:
+def ranked_strategy_vol_adjusted(df_preds,
+                                 target_spreads,
+                                 vol_lookback=150,
+                                 z_lookback=20,
+                                 z_thresh=1.0,
+                                 exit_z_thresh=1.0):
     """
-    Set the *front* leg (smaller first index) to 1 contract.
-    Scale the other leg by inverse-vol ratio, rounded to int.
-    Non-active spreads get 0 unless you pass all_spreads to include them as zeros.
+    Calculates rolling volatility for each spread and logs it as 'Vol_{spread}'.
+    Trades are still opened/closed based on z-scores, but no contract sizing
+    — only volatility values are carried through in the output.
     """
-    # pick the front leg among the active pair
-    front = min([long_s, short_s], key=front_idx)
-    back  = short_s if front == long_s else long_s
-
-    u_front = inv_vol(vols.get(front, np.nan))
-    u_back  = inv_vol(vols.get(back,  np.nan))
-
-    # base = 1 on front; other = round(u_back / u_front)
-    c_front = max(min_contract, 1)  # force at least 1
-    ratio   = (u_back / u_front) if u_front > 0 else 1.0
-    c_back  = int(round(max(min_contract, ratio)))
-
-    # optional cap
-    if cap is not None:
-        c_front = min(c_front, cap)
-        c_back  = min(c_back,  cap)
-
-    # assign signs: long positive, short negative
-    res = {front: +c_front, back: -c_back} if front == long_s else {front: -c_front, back: +c_back}
-
-    # include zeros for all other spreads if requested
-    if all_spreads:
-        for s in all_spreads:
-            res.setdefault(s, 0)
-
-    return res
-
-
-def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_lookback=20, z_thresh=1.0, exit_z_thresh=1.0):
     df = df_preds.copy()
     df = df.dropna(subset=[f"Pred_{s}" for s in target_spreads] + target_spreads)
     df.sort_index(inplace=True)
 
+    # --- Calculate volatility and z-scores ---
     for s in target_spreads:
         df[f"Vol_{s}"] = df[s].diff().rolling(window=vol_lookback).std()
         df[f"Vol_z_{s}"] = df[s].diff().rolling(window=z_lookback).std()
@@ -94,9 +58,6 @@ def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_l
     current_position = None
     current_weights = (0.5, 0.5)
 
-    # for i in range(len(df)-1):
-    #     row_today = df.iloc[i]
-    #     row_next = df.iloc[i + 1]
     for i in range(len(df)):
         row_today = df.iloc[i]
         if i == len(df) - 1:
@@ -105,45 +66,28 @@ def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_l
             row_next = df.iloc[i + 1]
 
         zscores = {s: row_today[f"Z_{s}"] for s in target_spreads}
-        preds = {s: row_today[f"Pred_{s}"] for s in target_spreads}
-        vols = {s: row_today[f"Vol_{s}"] for s in target_spreads}
+        preds   = {s: row_today[f"Pred_{s}"] for s in target_spreads}
+        vols    = {s: row_today[f"Vol_{s}"] for s in target_spreads}
 
         roll_detected = (row_today.get("DTR", 1) == 0) or (row_today.get("DFR", 1) == 0)
+        entry_block   = (row_today.get("DTR", 1) != 0) and (row_today.get("DFR", 1) != 0)
 
-        long_spread = max(zscores, key=zscores.get)
+        long_spread  = max(zscores, key=zscores.get)
         short_spread = min(zscores, key=zscores.get)
 
-        entry_block = row_today.get("DTR", 1) != 0 and row_today.get("DFR", 1) != 0
-
+        # --- Exit condition ---
         if current_position:
-            current_long, current_short = current_position
-            if roll_detected or zscores[current_long] < exit_z_thresh or zscores[current_short] > -exit_z_thresh:
+            curr_long, curr_short = current_position
+            if roll_detected or zscores[curr_long] < exit_z_thresh or zscores[curr_short] > -exit_z_thresh:
                 current_position = None
-                current_weights = (0.5, 0.5)
+                current_weights  = (0.5, 0.5)
 
-        if not current_position and zscores[long_spread] >= z_thresh and zscores[short_spread] <= -z_thresh and entry_block:
+        # --- Entry condition ---
+        if (not current_position) and zscores[long_spread] >= z_thresh and zscores[short_spread] <= -z_thresh and entry_block:
             current_position = (long_spread, short_spread)
-            vol_long = vols[long_spread]
-            vol_short = vols[short_spread]
-            if np.isnan(vol_long) or np.isnan(vol_short) or (vol_long + vol_short) == 0:
-                weight_long = weight_short = 0.5
-            else:
-                weight_long = vol_short / (vol_long + vol_short)
-                weight_short = vol_long / (vol_long + vol_short)
-            current_weights = (weight_long, weight_short)
             trade_id += 1
 
-        if current_position:
-            long_s, short_s = current_position
-            contracts_all = contracts_by_front(
-                long_s, short_s, vols,
-                min_contract=1,  # front leg becomes 1
-                cap=None,  # or an int cap if you want to limit size
-                all_spreads=target_spreads
-            )
-        else:
-            contracts_all = {s: 0 for s in target_spreads}
-
+        # --- Logging and PnL ---
         if not current_position:
             trade_log.append({
                 "Date": row_today.name,
@@ -154,35 +98,32 @@ def ranked_strategy_vol_adjusted(df_preds, target_spreads, vol_lookback=150, z_l
                 **{f"Z_{s}": zscores[s] for s in target_spreads},
                 **{f"Pred_{s}": preds[s] for s in target_spreads},
                 **{f"Spread_{s}": row_today[s] for s in target_spreads},
-                **{f"Contracts_{s}": contracts_all[s] for s in target_spreads},
+                **{f"Vol_{s}": vols[s] for s in target_spreads},
             })
             daily_pnls.append(0.0)
             continue
 
-        long_spread, short_spread = current_position
-        weight_long, weight_short = current_weights
-
-        pnl_long = (row_next[long_spread] - row_today[long_spread]) * contracts_all[long_spread]
-        pnl_short = (row_next[short_spread] - row_today[short_spread]) * contracts_all[short_spread]
-        daily_pnls.append(pnl_long + pnl_short)
+        # --- Active position ---
+        long_s, short_s = current_position
+        pnl_long  = row_next[long_s]  - row_today[long_s]
+        pnl_short = row_next[short_s] - row_today[short_s]
+        daily_pnls.append(pnl_long - pnl_short)
 
         trade_log.append({
             "Date": row_today.name,
             "Trade": True,
             "TradeID": trade_id,
-            "LongSpread": long_spread,
-            "ShortSpread": short_spread,
-            "Weight_Long": weight_long,
-            "Weight_Short": weight_short,
+            "LongSpread": long_s,
+            "ShortSpread": short_s,
             "PnL_Long": pnl_long,
-            "PnL_Short": pnl_short,
-            "DailyPnL": pnl_long + pnl_short,
-            "Vol_Long": vols[long_spread],
-            "Vol_Short": vols[short_spread],
+            "PnL_Short": -pnl_short,
+            "DailyPnL": pnl_long - pnl_short,
+            "Vol_Long": vols[long_s],
+            "Vol_Short": vols[short_s],
             **{f"Z_{s}": zscores[s] for s in target_spreads},
             **{f"Pred_{s}": preds[s] for s in target_spreads},
             **{f"Spread_{s}": row_today[s] for s in target_spreads},
-            **{f"Contracts_{s}": contracts_all[s] for s in target_spreads},
+            **{f"Vol_{s}": vols[s] for s in target_spreads},
         })
 
     df_result = pd.DataFrame(trade_log).set_index("Date")
