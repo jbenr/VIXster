@@ -356,7 +356,7 @@ with tabs[1]:
 
                 for spread in target_spreads:
                     # Vol + VolFactor rows
-                    output_dict["Vol"][spread] = vols_last.get(spread, np.nan)
+                    output_dict["60d Vol"][spread] = vols_last.get(spread, np.nan)
 
                     # Signal labels
                     if is_trade:
