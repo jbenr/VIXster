@@ -344,7 +344,7 @@ with tabs[1]:
                     "Resid": {},
                     "Z": {},
                     "Signal": {},
-                    "Vol": {},
+                    "60d Vol": {},
                     "Contracts": {}
                 }
 
