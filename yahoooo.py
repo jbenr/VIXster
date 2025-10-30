@@ -78,12 +78,7 @@ def get_price(symbol: str) -> pd.DataFrame | None:
     scraping_info = {
         "VIX": {
             "url": "https://www.cboe.com/tradable_products/vix/",
-            "css": (
-                "#charts-tile > div > div > div:nth-child(1) "
-                "> div.Box-cui__sc-6h7t1h-0.BorderBox-cui__sc-100l55d-0."
-                "eLdhlz.lewxc > div.Box-cui__sc-6h7t1h-0.Text-cui__sc-1owhlvg-0."
-                "khbfga.cSVxuZ"
-            ),
+            "css": "h2.tw-text-ink-brand-secondary.tw-font-subheading-lg",
             # If scraping fails, we’ll fallback to yfinance("^VIX").
         },
         "SP500": {
@@ -163,5 +158,5 @@ def main():
     print(s)
 
 if __name__ == "__main__":
-    # main()
-    None
+    main()
+    # None
