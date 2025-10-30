@@ -51,6 +51,8 @@ def scraper(url: str, css_selector: str) -> float:
 
         elem = driver.find_element(By.CSS_SELECTOR, css_selector)
         text = elem.text.strip().replace(",", "")  # remove commas if present
+        text = text.strip().replace("$", "")  # remove $ if present
+
         price = float(text)
     finally:
         driver.quit()
