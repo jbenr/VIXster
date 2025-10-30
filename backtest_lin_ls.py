@@ -130,7 +130,7 @@ def ranked_strategy_vol_adjusted(df_preds,
     df_result["CumulativePnL"] = df_result["DailyPnL"].cumsum()
     df_result["TradeCumulativePnL"] = df_result.groupby("TradeID")["DailyPnL"].cumsum()
 
-    utils.pdf(df_result)
+    utils.pdf(df_result.tail(1))
     return df_result
 
 
