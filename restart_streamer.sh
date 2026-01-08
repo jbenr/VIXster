@@ -12,15 +12,18 @@ tmux has-session -t "$SESSION" 2>/dev/null || {
   exit 1
 }
 
-# Kill the window if it already exists (ignore error if not)
-tmux kill-window -t "${SESSION}:${WINDOW}" 2>/dev/null || true
+# Ensure the window exists; if not, create it (but do NOT kill/delete it)
+if ! tmux list-windows -t "$SESSION" -F '#W' | grep -qx "$WINDOW"; then
+  tmux new-window -t "$SESSION" -n "$WINDOW" -c "$WORKDIR"
+fi
 
-# Recreate window and run command
-tmux new-window -t "$SESSION" -n "$WINDOW" -c "$WORKDIR" "$CMD"
+# Restart the process *inside* the existing window (pane 0) without deleting the window
+# NOTE: If your streamer is in a different pane, change .0 to .1, .2, etc.
+tmux respawn-pane -t "${SESSION}:${WINDOW}.0" -k "bash -lc 'cd \"$WORKDIR\" && $CMD; echo; echo \"[streamer exited — press enter]\"; read'"
 
 # If we're already inside tmux, focus it
 if [[ -n "${TMUX:-}" ]]; then
   tmux select-window -t "${SESSION}:${WINDOW}"
 fi
 
-echo "🚀✅ Recreated and started ${SESSION}:${WINDOW}"
+echo "🚀✅ Restarted ${SESSION}:${WINDOW} (window preserved)"
