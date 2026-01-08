@@ -12,18 +12,25 @@ tmux has-session -t "$SESSION" 2>/dev/null || {
   exit 1
 }
 
-# Ensure the window exists; if not, create it (but do NOT kill/delete it)
+# Ensure window exists (create it as an interactive shell)
 if ! tmux list-windows -t "$SESSION" -F '#W' | grep -qx "$WINDOW"; then
   tmux new-window -t "$SESSION" -n "$WINDOW" -c "$WORKDIR"
 fi
 
-# Restart the process *inside* the existing window (pane 0) without deleting the window
-# NOTE: If your streamer is in a different pane, change .0 to .1, .2, etc.
-tmux respawn-pane -t "${SESSION}:${WINDOW}.0" -k "bash -lc 'cd \"$WORKDIR\" && $CMD; echo; echo \"[streamer exited — press enter]\"; read'"
+TARGET="${SESSION}:${WINDOW}"
 
-# If we're already inside tmux, focus it
+# Go to the right window (if you're already in tmux, just select it;
+# if you're outside, attach straight into it)
 if [[ -n "${TMUX:-}" ]]; then
-  tmux select-window -t "${SESSION}:${WINDOW}"
+  tmux select-window -t "$TARGET"
+else
+  tmux attach -t "$SESSION" \; select-window -t "$TARGET"
 fi
 
-echo "🚀✅ Restarted ${SESSION}:${WINDOW} (window preserved)"
+# Now "do the things" in that window/pane:
+# stop current process, cd, then start streamer
+tmux send-keys -t "${TARGET}.0" C-c
+tmux send-keys -t "${TARGET}.0" "cd \"$WORKDIR\"" C-m
+tmux send-keys -t "${TARGET}.0" "$CMD" C-m
+
+echo "🚀✅ Sent restart commands to $TARGET (window preserved)"
