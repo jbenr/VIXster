@@ -102,50 +102,112 @@ def live():
 
 # ───────────────────────────── performance ─────────────────────────────
 
+# Investor definitions (except Benjin, who is the residual owner)
+INVESTORS = {
+    "Chuck": {
+        "invest_date":        "2024-03-06",
+        "initial_investment": 7000.0,
+        "strike":             20699.76,
+        "logo_url":           "https://upload.wikimedia.org/wikipedia/commons/archive/5/5c/20240330094136%21Chicago_Bears_logo.svg",
+        "logo_height":        40
+    },
+    "Luger": {
+        "invest_date":        "2024-05-08",
+        "initial_investment": 1000.0,
+        "strike":             23714.12,
+        "logo_url":           "https://images.squarespace-cdn.com/content/v1/57c489118419c295dde4c84a/1495392731348-WRZNA4R1PB910OA70Q3D/peter-luger-logo.jpg",
+        "logo_height":        40
+    },
+}
+
+
+def compute_investor_results(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
+    """
+    Given a NAV DataFrame (Date, Start NAV, Net Inflow, End NAV),
+    compute investor ownership shares and return (df, investor_results).
+    Works without any network calls.
+    """
+    import copy
+    investors = copy.deepcopy(INVESTORS)
+
+    # ─── Compute each non-Benjin investor’s ownership_pct ─────────────────────
+    sum_of_ownerships = 0.0
+    ownership_map: Dict[str, float] = {}
+
+    for name, info in investors.items():
+        initial_cap = float(info["initial_investment"])
+        strike = float(info["strike"])
+        pct = initial_cap / strike
+        ownership_map[name] = pct
+        sum_of_ownerships += pct
+
+    # ─── Define Benjin as leftover investor ───────────────────────────────────
+    benjin_initial = float(df.iloc[0]["Start NAV"])
+    if benjin_initial < 0:
+        raise RuntimeError(f"Leftover capital (for Benjin) is negative: {benjin_initial}")
+
+    benjin_pct = 1.0 - sum_of_ownerships
+    if benjin_pct < 0:
+        raise RuntimeError(f"Benjin’s ownership_pct is negative ({benjin_pct}). Check strikes & investments.")
+
+    strategy_start_date = pd.to_datetime(datetime(2024, 8, 27))
+    investors["Benjin"] = {
+        "invest_date":        strategy_start_date.strftime("%Y-%m-%d"),
+        "initial_investment": benjin_initial,
+        "logo_url":           "https://cdn.freebiesupply.com/images/large/2x/washington-redskins-logo-transparent.png",
+        "logo_height":        50
+    }
+    ownership_map["Benjin"] = benjin_pct
+
+    # ─── Build NAV Share columns & results ─────────────────────────────────────
+    investor_results: Dict[str, Dict] = {}
+
+    for name, info in investors.items():
+        invest_date = pd.to_datetime(info["invest_date"])
+        initial_cap = float(info["initial_investment"])
+        pct = ownership_map[name]
+
+        df[f"{name} NAV Share"] = pct * df["End NAV"]
+
+        current_val = float(df[f"{name} NAV Share"].iloc[-1])
+        pnl = current_val - initial_cap
+        return_pct = (pnl / initial_cap) * 100 if initial_cap != 0 else 0.0
+
+        investor_results[name] = {
+            "invest_date":        invest_date.date(),
+            "initial_investment": initial_cap,
+            "ownership_pct":      pct,
+            "current_value":      current_val,
+            "pnl":                pnl,
+            "return_pct":         return_pct,
+            "logo_url":           info.get("logo_url", ""),
+            "logo_height":        info.get("logo_height", 40),
+        }
+
+    return df, investor_results
+
+
+def load_performance_from_disk(
+    parquet_path: str = "data/performance.parquet",
+) -> Tuple[pd.DataFrame, Dict]:
+    """Load saved NAV data from disk and compute investor results (no IBKR call)."""
+    if not os.path.exists(parquet_path):
+        raise RuntimeError(f"No saved performance data found at {parquet_path}. Click ‘Refresh NAV Data’ first.")
+    df = pd.read_parquet(parquet_path)
+    return compute_investor_results(df)
+
+
 def pull_performance(
     out_parquet: str = "data/performance.parquet"
 ) -> Tuple[pd.DataFrame, Dict]:
     """
-    1) Downloads the latest Summ.xml from IBKR Flex WebService.
-    2) Parses each <FlexStatement> into daily NAV rows (via parse_flex_xml_to_df).
-    3) ALSO parses data/starting_dataer.xml (if present) and merges rows.
-    4) Saves merged daily NAV DataFrame to out_parquet.
-    5) Defines investors (non-Benjin) and computes ownership %.
-    6) Sets Benjin as the leftover ownership & initial capital (first Start NAV).
-    7) Builds "<Name> NAV Share" columns; computes current_value, pnl, return_pct.
-    8) Returns (df, investor_results)
-
-    To add a new investor, insert them in the `investors` dict below.
+    Downloads the latest Summ.xml from IBKR Flex WebService, parses it,
+    merges with historical seed data, saves to parquet, and computes
+    investor ownership results.
     """
 
-    # ─── 0) DEFINE YOUR INVESTORS HERE (except Benjin) ────────────────────────────
-    investors = {
-        "Chuck": {
-            "invest_date":        "2024-03-06",
-            "initial_investment": 7000.0,
-            "strike":             20699.76,
-            "logo_url":           "https://upload.wikimedia.org/wikipedia/commons/archive/5/5c/20240330094136%21Chicago_Bears_logo.svg",
-            "logo_height":        40
-        },
-        "Luger": {
-            "invest_date":        "2024-05-08",
-            "initial_investment": 1000.0,
-            "strike":             23714.12,
-            "logo_url":           "https://images.squarespace-cdn.com/content/v1/57c489118419c295dde4c84a/1495392731348-WRZNA4R1PB910OA70Q3D/peter-luger-logo.jpg",
-            "logo_height":        40
-        },
-        # Example:
-        # "Alice": {
-        #     "invest_date":        "2024-07-01",
-        #     "initial_investment": 5000.0,
-        #     "strike":             25000.00,
-        #     "logo_url":           "https://example.com/alice_logo.png",
-        #     "logo_height":        40
-        # },
-    }
-
     # ─── A) Download Summ.xml from IBKR FlexWebService ────────────────────────────
-    token = "154979803551046183567560"
+    token = "35829916154420740066444"
     queryId = "1155973"
     base_url = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
 
@@ -157,7 +219,9 @@ def pull_performance(
     root = ET.fromstring(resp.text)
     ref_elem = root.find("ReferenceCode")
     if ref_elem is None or ref_elem.text is None:
-        raise RuntimeError("Could not obtain ReferenceCode from IBKR response.")
+        error_msg = root.findtext("ErrorMessage", "unknown error")
+        error_code = root.findtext("ErrorCode", "?")
+        raise RuntimeError(f"IBKR Flex API error {error_code}: {error_msg}")
     ref_code = ref_elem.text
 
     # 2) Poll until Summ.xml is ready, then write it to disk
@@ -179,81 +243,20 @@ def pull_performance(
     # ─── B) Parse both XMLs, merge, save ──────────────────────────────────────────
     df_main = parse_flex_xml_to_df(summ_path)
 
-    # Optional seed file to prepend/merge historical rows
     starting_xml_path = "data/starting_dataer.xml"
     if os.path.exists(starting_xml_path):
         df_start = parse_flex_xml_to_df(starting_xml_path)
-        # Merge: concat, dedupe by Date (keep LAST so the latest download wins if same date)
         df = pd.concat([df_start, df_main], ignore_index=True)
         df = df.sort_values("Date")
         df = df.drop_duplicates(subset=["Date"], keep="last").reset_index(drop=True)
     else:
         df = df_main
 
-    # Persist merged daily NAV DataFrame for Streamlit
     os.makedirs(os.path.dirname(out_parquet), exist_ok=True)
     df.to_parquet(out_parquet, index=False)
 
-    # ─── C) Compute each non-Benjin investor’s ownership_pct ─────────────────────
-    sum_of_initials = 0.0
-    sum_of_ownerships = 0.0
-    ownership_map: Dict[str, float] = {}
-
-    for name, info in investors.items():
-        initial_cap = float(info["initial_investment"])
-        strike = float(info["strike"])
-        pct = initial_cap / strike
-        ownership_map[name] = pct
-
-        sum_of_initials += initial_cap
-        sum_of_ownerships += pct
-
-    # ─── D) Define Benjin as leftover investor ───────────────────────────────────
-    benjin_initial = float(df.iloc[0]["Start NAV"])
-    if benjin_initial < 0:
-        raise RuntimeError(f"Leftover capital (for Benjin) is negative: {benjin_initial}")
-
-    benjin_pct = 1.0 - sum_of_ownerships
-    if benjin_pct < 0:
-        raise RuntimeError(f"Benjin’s ownership_pct is negative ({benjin_pct}). Check strikes & investments.")
-
-    strategy_start_date = pd.to_datetime(datetime(2024, 8, 27))
-    investors["Benjin"] = {
-        "invest_date":        strategy_start_date.strftime("%Y-%m-%d"),
-        "initial_investment": benjin_initial,
-        "logo_url":           "https://cdn.freebiesupply.com/images/large/2x/washington-redskins-logo-transparent.png",
-        "logo_height":        50
-    }
-    ownership_map["Benjin"] = benjin_pct
-
-    # ─── E) Build NAV Share columns & results ─────────────────────────────────────
-    investor_results: Dict[str, Dict] = {}
-
-    for name, info in investors.items():
-        invest_date = pd.to_datetime(info["invest_date"])
-        initial_cap = float(info["initial_investment"])
-        pct = ownership_map[name]
-
-        # 1) "<Name> NAV Share"
-        df[f"{name} NAV Share"] = pct * df["End NAV"]
-
-        # 2) Current value, PnL, return %
-        current_val = float(df[f"{name} NAV Share"].iloc[-1])
-        pnl = current_val - initial_cap
-        return_pct = (pnl / initial_cap) * 100 if initial_cap != 0 else 0.0
-
-        investor_results[name] = {
-            "invest_date":        invest_date.date(),
-            "initial_investment": initial_cap,
-            "ownership_pct":      pct,
-            "current_value":      current_val,
-            "pnl":                pnl,
-            "return_pct":         return_pct,
-            "logo_url":           info.get("logo_url", ""),
-            "logo_height":        info.get("logo_height", 40),
-        }
-
-    return df, investor_results
+    # ─── C) Compute investor results from the merged DataFrame ────────────────────
+    return compute_investor_results(df)
 
 
 def main():

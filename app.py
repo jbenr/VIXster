@@ -9,7 +9,7 @@ import utils
 
 from prep_data_2 import load_data, feature_engineer
 from backtest_lin_ls import load_models, generate_all_predictions, ranked_strategy_vol_adjusted
-from update_data import pull_performance
+from update_data import pull_performance, load_performance_from_disk
 import update_data
 
 # If your IBKR spread streamer writes updated data to this file:
@@ -348,7 +348,7 @@ with tabs[1]:
                     "Contracts": {}
                 }
 
-                # If there’s a trade, still label the long/short columns;
+                # If there's a trade, still label the long/short columns;
                 # Contracts row is now the vol-factor sizing (for all spreads).
                 is_trade = signal["Trade"].values[0] in [True, "TRUE", "True"]
                 long_spread = signal["LongSpread"].values[0] if is_trade else None
@@ -485,7 +485,7 @@ with tabs[2]:
     st.header("Historical Performance")
 
     # -----------------------------
-    # 1) “Refresh NAV Data” button
+    # 1) "Refresh NAV Data" button
     # -----------------------------
     if st.button("Refresh NAV Data"):
         status = st.empty()
@@ -504,13 +504,13 @@ with tabs[2]:
 
     # ------------------------------------------------------
     # 2) Decide where to get the DataFrame (df) from:
-    #    • If session_state has “perf_df”, use that.
-    #    • Else if "data/performance.parquet" exists, load df from disk.
+    #    • If session_state has "perf_df", use that.
+    #    • Else load from data/performance.parquet on disk (no IBKR call).
     #    • Otherwise stop and ask the user to refresh.
     # ------------------------------------------------------
     if "perf_df" not in st.session_state or "investor_results" not in st.session_state:
         try:
-            df, investor_results = pull_performance(out_parquet="data/performance.parquet")
+            df, investor_results = load_performance_from_disk("data/performance.parquet")
             st.session_state["perf_df"] = df
             st.session_state["investor_results"] = investor_results
         except Exception as e:
@@ -523,14 +523,14 @@ with tabs[2]:
 
     # ------------------------------------------------------
     # 3) Decide where to get investor_results from:
-    #    • If session_state has “investor_results”, use that.
+    #    • If session_state has "investor_results", use that.
     #    • Otherwise, leave it empty (user must refresh to populate).
     # ------------------------------------------------------
     investor_results = st.session_state.get("investor_results", {})
 
     # If df is empty or investor_results was never populated, show an info bar:
     if df.empty:
-        st.error("Loaded performance data is empty. Try clicking “Refresh NAV Data” again.")
+        st.error('Loaded performance data is empty. Try clicking "Refresh NAV Data" again.')
         st.stop()
 
     # ─── 4) Strategy‐level Monthly & Yearly Returns ────────────────────────────────
@@ -755,7 +755,7 @@ with tabs[2]:
                 .map(lambda v: "color: green" if v > 0 else "color: red", subset=["PnL", "Returns %"])
             )
     else:
-        st.info("Investor details not yet populated. Click “Refresh NAV Data” to fetch investor info.")
+        st.info('Investor details not yet populated. Click "Refresh NAV Data" to fetch investor info.')
 
     # ─── 8) Store df in session_state in case other tabs need it ──────────────────
     st.session_state["df"] = df
