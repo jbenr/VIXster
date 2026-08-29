@@ -71,12 +71,14 @@ with tabs[0]:
         return f"{parse_month_code(left_code)}/{parse_month_code(right_code)}"
 
     def load_spread_parquet():
-        """Load the parquet file and parse the Months column if present."""
-        if not os.path.exists(SPREAD_FILE):
-            st.warning(f"No spread data file found at {SPREAD_FILE}. Waiting for streamer to create it.")
-            st.stop()
+        """Load the parquet file and parse the Months column if present.
 
-        df_spread = pd.read_parquet(SPREAD_FILE)
+        A missing or 0-byte file is an expected transient state (streamer
+        just started, mid-restart, or briefly disconnected from IBKR) --
+        not an application error -- so it's reported via FileNotFoundError
+        rather than letting pyarrow's file-size-0 error surface.
+        """
+        df_spread = utils.safe_read_parquet(SPREAD_FILE)
         if "Spread" in df_spread.columns:
             df_spread = df_spread.set_index("Spread")
 
@@ -89,9 +91,11 @@ with tabs[0]:
     if "df_spread" not in st.session_state:
         try:
             st.session_state["df_spread"] = load_spread_parquet()
+        except FileNotFoundError:
+            st.session_state["df_spread"] = None
         except Exception as e:
             st.error(f"Error reading {SPREAD_FILE}: {e}")
-            st.stop()
+            st.session_state["df_spread"] = None
 
     # Layout with columns
     col1, col2, spacer = st.columns([1, 1, 2])
@@ -101,8 +105,10 @@ with tabs[0]:
         if st.button("Refresh Spread File"):
             try:
                 st.session_state["df_spread"] = load_spread_parquet()
+            except FileNotFoundError as e:
+                st.warning(f"{e} Keeping last known data.")
             except Exception as e:
-                st.error(f"Error reading {SPREAD_FILE}: {e}")
+                st.error(f"Error reading {SPREAD_FILE}: {e} — keeping last known data.")
 
     # 2) IBKR Login Button
     with col2:

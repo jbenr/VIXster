@@ -9,6 +9,7 @@ import sys
 from tabulate import tabulate, tabulate_formats
 import pyarrow  # Ensure pyarrow is installed for Parquet writing
 from dateutil.relativedelta import relativedelta
+import utils
 
 PARQUET_FILE = "data/spreads.parquet"
 
@@ -164,7 +165,7 @@ def display_loop(app):
                 has_any_nonzero = (num != 0).any().any()
 
                 if has_any_nonzero:
-                    df.reset_index().to_parquet(PARQUET_FILE, index=False)
+                    utils.atomic_to_parquet(df.reset_index(), PARQUET_FILE, index=False)
 
 
 def run():

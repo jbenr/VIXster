@@ -1,6 +1,7 @@
 import os
 import glob
 import sys
+import tempfile
 import time
 from pathlib import Path
 from tabulate import tabulate, tabulate_formats
@@ -59,6 +60,62 @@ def get_abs_path(relative_path):
     Get the absolute path for a given relative path based on the project root directory.
     """
     return os.path.join(get_project_root(), relative_path)
+
+
+def atomic_to_parquet(df, path, **kwargs):
+    """
+    Write a DataFrame to `path` as Parquet atomically.
+
+    Plain `df.to_parquet(path)` opens `path` directly, which truncates it to
+    0 bytes before any data is written. A concurrent reader (a Streamlit app
+    polling the file, e.g.) can catch it mid-write, and if the writer is
+    killed/restarted at that exact moment the file is left truncated -- 0
+    bytes -- until the next successful write. That's the "Parquet file size
+    is 0 bytes" error.
+
+    This instead writes to a temp file in the same directory, then
+    os.replace()'s it into place. os.replace is atomic on POSIX, so a reader
+    always sees either the complete old file or the complete new one --
+    never a partial/empty one -- and a crash mid-write just leaves a
+    harmless temp file behind, with the real file untouched.
+    """
+    path = str(path)
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix=f".{os.path.basename(path)}.", suffix=".tmp"
+    )
+    os.close(fd)
+    try:
+        df.to_parquet(tmp_path, **kwargs)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def safe_read_parquet(path, **kwargs):
+    """
+    Read a Parquet file, failing with a clear/expected error for the
+    "not ready yet" case (missing or 0-byte file) instead of letting
+    pyarrow's cryptic "Parquet file size is 0 bytes" surface.
+
+    Callers can catch FileNotFoundError specifically to distinguish
+    "data isn't there yet" (transient, expected) from a genuinely
+    corrupt/unreadable file (a real error).
+    """
+    import pandas as pd
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} does not exist yet.")
+    if os.path.getsize(path) == 0:
+        raise FileNotFoundError(
+            f"{path} is empty (0 bytes) -- the writer may be mid-write, "
+            "restarting, or hasn't produced any data yet."
+        )
+    return pd.read_parquet(path, **kwargs)
 
 
 def globber(directory_path, type):

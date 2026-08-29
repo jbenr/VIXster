@@ -55,7 +55,7 @@ def load_data(live=False):
         sp.columns = ['SP500']
         print(vx, sp)
 
-        live_spreads = pd.read_parquet('data/spreads.parquet')
+        live_spreads = utils.safe_read_parquet('data/spreads.parquet')
         max_date = live_spreads['Last Update'].max()
         live_spreads[max_date] = ((live_spreads['Bid Size'] * live_spreads['Bid Price'])\
         + (live_spreads['Ask Size'] * live_spreads['Ask Price']))\
