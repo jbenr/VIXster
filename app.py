@@ -11,6 +11,7 @@ from prep_data_2 import load_data, feature_engineer
 from backtest_lin_ls import load_models, generate_all_predictions, ranked_strategy_vol_adjusted
 from update_data import pull_performance, load_performance_from_disk
 import update_data
+import performance
 
 # If your IBKR spread streamer writes updated data to this file:
 SPREAD_FILE = "data/spreads.parquet"
@@ -494,19 +495,19 @@ with tabs[2]:
     # 1) "Refresh NAV Data" button
     # -----------------------------
     if st.button("Refresh NAV Data"):
-        status = st.empty()
-        try:
-            # Now saving to "data/performance.parquet"
-            df, investor_results = pull_performance(
-                out_parquet="data/performance.parquet"
-            )
-            st.session_state["perf_df"] = df
-            st.session_state["investor_results"] = investor_results
-            status.success(f"Performance data updated at {datetime.now():%Y-%m-%d %H:%M:%S}.")
-            utils.git_push(f"auto push on NAV ref {datetime.now()}")
-
-        except Exception as e:
-            status.error(f"Error updating performance data: {e}")
+        with st.status("Refreshing NAV data…", expanded=True) as status:
+            try:
+                df, investor_results = pull_performance(
+                    out_parquet="data/performance.parquet", log=st.write
+                )
+                st.session_state["perf_df"] = df
+                st.session_state["investor_results"] = investor_results
+                st.write("Pushing to GitHub…")
+                utils.git_push(f"auto push on NAV ref {datetime.now()}")
+                status.update(label=f"NAV data updated through {df['Date'].max():%b %d, %Y}.",
+                              state="complete", expanded=False)
+            except Exception as e:
+                status.update(label=f"Error updating performance data: {e}", state="error")
 
     # ------------------------------------------------------
     # 2) Decide where to get the DataFrame (df) from:
@@ -539,18 +540,15 @@ with tabs[2]:
         st.error('Loaded performance data is empty. Try clicking "Refresh NAV Data" again.')
         st.stop()
 
-    # ─── 4) Strategy‐level Monthly & Yearly Returns ────────────────────────────────
-    df_monthly = (
-        df.set_index("Date")
-        .resample("ME")  # month-end
-        .agg({
-            "Start NAV": "first",
-            "End NAV": "last",
-            "Net Inflow": "sum"
-        })
-    )
-    df_monthly["MonthlyReturn"] = ((df_monthly["End NAV"] - df_monthly["Start NAV"] - df_monthly["Net Inflow"])
-                                   / df_monthly["Start NAV"]) * 100
+    # ─── 4) Monthly & yearly returns ────────────────────────────────────────────
+    # All returns are time-weighted (built from daily returns), so deposits and
+    # withdrawals never show up as gains or losses.
+    gaps = performance.find_gaps(df)
+    if gaps:
+        st.error("NAV history has gaps (returns may be wrong) between: " + ", ".join(
+            f"{a:%Y-%m-%d} → {b:%Y-%m-%d}" for a, b in gaps) + ". Click 'Refresh NAV Data' to backfill.")
+
+    df_monthly = performance.period_returns(df, "ME").rename("MonthlyReturn").to_frame() * 100
 
     df_monthly["Year"] = df_monthly.index.year
     df_monthly["Month"] = df_monthly.index.strftime("%b")
@@ -564,46 +562,40 @@ with tabs[2]:
     month_order = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     df_returns_pivot = df_returns_pivot.reindex(columns=month_order)
 
-    df_yearly = (
-        df.set_index("Date")
-          .resample("YE")
-          .agg({
-              "Start NAV": "first",
-              "End NAV":   "last",
-              "Net Inflow": "sum"
-          })
-    )
-    df_yearly["YearlyReturn"] = (
-        (df_yearly["End NAV"] - df_yearly["Start NAV"] - df_yearly["Net Inflow"])
-        / df_yearly["Start NAV"]
-    ) * 100
+    df_yearly = performance.period_returns(df, "YE").rename("Return").to_frame() * 100
     df_yearly.index = df_yearly.index.year
+    df_yearly["Sharpe"] = performance.yearly_sharpe(df)
 
     st.subheader("Returns")
 
+    def _green_red(v):
+        return "" if pd.isna(v) else ("color: green" if v > 0 else "color: red")
+
     st.table(
         df_returns_pivot.style
-        .format("{:.2f}%", na_rep="")  # Fill NaNs with blank
-        .map(lambda v: "color: green" if v > 0 else "color: red")
+        .format("{:.1f}%", na_rep="")  # Fill NaNs with blank
+        .map(_green_red)
+    )
+
+    yearly_t = df_yearly.T
+    st.table(
+        yearly_t.style
+        .map(_green_red)
+        .format("{:.1f}%", subset=pd.IndexSlice["Return", :])
+        .format("{:.2f}", subset=pd.IndexSlice["Sharpe", :])
     )
 
     st.table(
-        df_yearly[["YearlyReturn"]]
-        .T
-        .style.map(lambda v: "color: green" if v > 0 else "color: red")
-        .format("{:.2f}%")
+        pd.DataFrame({
+            "Total Return": [df["Cumulative Return"].iloc[-1] * 100],
+            "Sharpe":       [performance.sharpe(df["Daily Return"])],
+        }, index=["Model"])
+        .style.map(_green_red)
+        .format({"Total Return": "{:.1f}%", "Sharpe": "{:.2f}"})
     )
 
-    total_return = (
-        df["End NAV"].iloc[-1]
-        - df["Start NAV"].iloc[0]
-        - df["Net Inflow"].sum()
-    ) / df["Start NAV"].iloc[0]
-    st.table(
-        pd.DataFrame({"Total Return %": [total_return * 100]}, index=["Model"])
-        .style.map(lambda v: "color: green" if v > 0 else "color: red")
-        .format("{:.2f}%")
-    )
+    df_feat = pd.read_parquet("data/fred.parquet")
+    df_feat.index = pd.to_datetime(df_feat.index)
 
     df_monthly["Year"] = df_monthly.index.year
     years = sorted(df_monthly["Year"].unique(), reverse=True)
@@ -651,7 +643,7 @@ with tabs[2]:
         tooltip=[
             alt.Tooltip("MonthStr:N", title="Month"),
             alt.Tooltip("Label:N", title="Source"),
-            alt.Tooltip("Cumulative Return:Q", title="Return", format=".2%")
+            alt.Tooltip("Cumulative Return:Q", title="Return", format=".1%")
         ]
     )
     line = base.mark_line()
@@ -689,7 +681,7 @@ with tabs[2]:
         tooltip=[
             alt.Tooltip("MonthStr:N", title="Month"),
             alt.Tooltip("Series:N", title="Series"),
-            alt.Tooltip("Monthly Return:Q", title="Return (%)", format=".2%")
+            alt.Tooltip("Monthly Return:Q", title="Return (%)", format=".1%")
         ]
     ).properties(
         width=600,
@@ -707,7 +699,7 @@ with tabs[2]:
         ),
         tooltip=[
             alt.Tooltip("MonthStr:N", title="Month"),
-            alt.Tooltip("Outperformance:Q", title="Outperformance (%)", format=".2%")
+            alt.Tooltip("Outperformance:Q", title="Outperformance (%)", format=".1%")
         ]
     ).properties(
         width=600,
@@ -745,6 +737,7 @@ with tabs[2]:
 
             inv_df = pd.DataFrame({
                 "Initial Investment": [info["initial_investment"]],
+                "Ownership":          [info["ownership_pct"] * 100],
                 "Current Value":      [info["current_value"]],
                 "PnL":                [info["pnl"]],
                 "Returns %":          [info["return_pct"]]
@@ -754,9 +747,10 @@ with tabs[2]:
                 inv_df.style
                 .format({
                     "Initial Investment": "${:,.2f}",
+                    "Ownership":          "{:.2f}%",
                     "Current Value":      "${:,.2f}",
                     "PnL":                "${:,.2f}",
-                    "Returns %":          "{:.2f}%"
+                    "Returns %":          "{:.1f}%"
                 })
                 .map(lambda v: "color: green" if v > 0 else "color: red", subset=["PnL", "Returns %"])
             )
