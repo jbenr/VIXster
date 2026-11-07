@@ -55,6 +55,16 @@ INVESTORS = {
 }
 
 
+# Owner deposits/withdrawals that should NOT change anyone's ownership %
+# (date -> amount). The Apr 2025 $2k and Jul 2025 $5k out-and-backs were loans.
+OWNERSHIP_NEUTRAL_FLOWS = {
+    "2025-04-07": 2000.0,
+    "2025-04-30": -2000.0,
+    "2025-07-09": -5000.0,
+    "2025-07-30": 5000.0,
+}
+
+
 # ───────────────────────────── IBKR download ─────────────────────────────
 
 def fetch_flex(from_date: Optional[str] = None, to_date: Optional[str] = None) -> str:
@@ -223,6 +233,9 @@ def compute_investor_results(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict]:
             contributed[name] += amt
             flow -= amt
             total += new_units
+        neutral = OWNERSHIP_NEUTRAL_FLOWS.get(row["Date"].strftime("%Y-%m-%d"))
+        if neutral is not None and abs(flow - neutral) < 0.01:
+            flow = 0.0  # no units issued/redeemed, so everyone's % stays put
         if abs(flow) > 0.005:  # owner's own deposit/withdrawal at market price
             price = float(row["Start NAV"]) / total
             units[OWNER] += flow / price
