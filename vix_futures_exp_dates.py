@@ -1,6 +1,7 @@
 import pandas as pd
 import pandas_market_calendars as market_cal
 import datetime
+import functools
 
 pd.set_option('future.no_silent_downcasting', True)
 
@@ -34,6 +35,12 @@ def is_business_day(input_date_str, input_date):
         None
 
 def run_over_time_frame(start_yr):
+    # The dates only change when the year does, so work them out once per process.
+    return list(_run_over_time_frame(start_yr))
+
+
+@functools.lru_cache(maxsize=None)
+def _run_over_time_frame(start_yr):
     #Goes through the years
 
     futures_exp_dates = []

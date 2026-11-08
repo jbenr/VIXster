@@ -2,56 +2,87 @@ import random, io, glob, os, time, re
 import pandas as pd
 import numpy as np
 import requests
-from tqdm import tqdm
-from datetime import datetime
-from requests_ip_rotator import ApiGateway, EXTRA_REGIONS
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 import vix_futures_exp_dates
 import utils
-
-aws_access= utils.AWS_ACCESS
-aws_secret= utils.AWS_SECRET
 
 headers = {'User-Agent': 'XYZ/3.0'}
 
 
-def pull_vix(exp, backfill=False):
+def _fetch_contract(session, url, date):
+    """Download one contract CSV (3 tries). Returns (date, df or None, status)."""
+    for attempt in range(3):
+        try:
+            response = session.get(f'{url}{date}.csv', headers=headers, timeout=20)
+            if response.status_code in (403, 404):  # CDN says 403 for contracts not listed yet
+                return date, None, 'not listed'
+            response.raise_for_status()
+            df = pd.read_csv(io.StringIO(response.content.decode('utf-8')))
+            return date, df, 'ok'
+        except (requests.exceptions.RequestException, pd.errors.ParserError) as e:
+            if attempt == 2:
+                return date, None, f'failed: {e}'
+            time.sleep(0.5 * 2 ** attempt)
+
+
+def pull_vix(exp, backfill=False, workers=8):
+    """Download VX contract files straight from CBOE's CDN, several at a time.
+
+    Fetches contracts that haven't expired yet, plus any that expired in the
+    last 10 days so their final settles are stored even if a day was missed.
+    """
     print('Downloading VIX Futures data...')
     utils.make_dir('data/VIX')
     reg_url = "https://cdn.cboe.com/data/us/futures/market_statistics/historical_data/VX/VX_"
-    # archive_url = "https://cdn.cboe.com/data/us/futures/market_statistics/historical_data/archive/VX/VX_"
 
     dates = [datetime.strptime(date_str, "%Y-%m-%d") for date_str in exp]
-    today = datetime.now().date()
-    
+    cutoff = datetime.now().date() - timedelta(days=10)
+
     if (backfill): dates = [date.strftime("%Y-%m-%d") for date in dates]
-    else: dates = [date.strftime("%Y-%m-%d") for date in dates if date.date() >= today]
+    else: dates = [date.strftime("%Y-%m-%d") for date in dates if date.date() >= cutoff]
 
-    gateway = ApiGateway("https://cdn.cboe.com",
-                         regions=EXTRA_REGIONS,
-                         access_key_id=aws_access,
-                         access_key_secret=aws_secret)
-    gateway.start()
-    session = requests.Session()
-    session.mount("https://cdn.cboe.com", gateway)
+    with requests.Session() as session, ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lambda d: _fetch_contract(session, reg_url, d), dates))
 
-    for date in tqdm(dates):
-        time.sleep(random.uniform(1, 3))
+    saved, failed = 0, []
+    for date, df, status in results:
+        if df is not None and len(df) > 1:
+            df.to_parquet(f'data/VIX/{date}.parquet')
+            saved += 1
+        elif status.startswith('failed'):
+            failed.append(f'{date} ({status})')
+    if failed:
+        print(f"Failed to download: {', '.join(failed)}")
+    print(f'Done downloading VIX Futures data ({saved} contracts).')
 
-        try:
-            response = session.get(f'{reg_url}{date}.csv', headers=headers)
 
-            file_object = io.StringIO(response.content.decode('utf-8'))
-            df = pd.read_csv(file_object)
-            
-            if len(df) > 1:
-                df.to_parquet(f'data/VIX/{date}.parquet')
+def _days_to_and_from_roll(trade_dates, expiry_col):
+    """DFR / DTR for every row at once.
 
-        except requests.exceptions.RequestException as e:
-            print(f"An error occurred: {e}")
-            return None
+    DFR = days since the latest expiry on or before the trade date.
+    DTR = days until the first expiry on or after the trade date.
+    NaN where there is no such expiry. Same numbers as the old row-by-row
+    scan, via a binary search over the sorted expiries.
+    """
+    td = trade_dates.to_numpy(dtype='datetime64[ns]')
+    exp = np.unique(expiry_col.dropna().to_numpy(dtype='datetime64[ns]'))
+    day = np.timedelta64(1, 'D')
 
-    gateway.shutdown()
-    print('Done downloading VIX Futures data.')
+    prev_i = np.searchsorted(exp, td, side='right') - 1
+    has_prev = (prev_i >= 0) & ~np.isnat(td)
+    dfr = np.full(len(td), np.nan)
+    dfr[has_prev] = (td[has_prev] - exp[prev_i[has_prev]]) // day
+
+    next_i = np.searchsorted(exp, td, side='left')
+    has_next = (next_i < len(exp)) & ~np.isnat(td)
+    dtr = np.full(len(td), np.nan)
+    dtr[has_next] = (exp[next_i[has_next]] - td[has_next]) // day
+
+    # whole days come back as int64 when nothing is missing, like the old apply
+    def whole(vals, ok):
+        return vals.astype('int64') if ok.all() else vals
+    return whole(dfr, has_prev), whole(dtr, has_next)
 
 
 def process_vix():
@@ -94,20 +125,8 @@ def process_vix():
     df['Expiry'] = df['Futures'].apply(lambda x: month_year_to_date.get(extract_month_year(x)))
     df['Expiry'] = pd.to_datetime(df['Expiry'])
     df['Trade Date'] = pd.to_datetime(df['Trade Date'])
-    # df['DTM'] = (df['Expiry'] - df['Trade Date']).dt.days
-    df['DTM'] = df.apply(lambda row: (row['Expiry'] - row['Trade Date']).days, axis=1)
-
-    def calculate_dfr(row, expiries):
-        future_expiries = expiries[expiries <= row['Trade Date']]
-        if not future_expiries.empty: return (row['Trade Date']-future_expiries.max()).days
-        else: return None
-    df['DFR'] = df.apply(lambda row: calculate_dfr(row, df['Expiry']), axis=1)
-
-    def calculate_dtr(row, expiries):
-        future_expiries = expiries[expiries >= row['Trade Date']]
-        if not future_expiries.empty: return (future_expiries.min()-row['Trade Date']).days
-        else: return None
-    df['DTR'] = df.apply(lambda row: calculate_dtr(row, df['Expiry']), axis=1)
+    df['DTM'] = (df['Expiry'] - df['Trade Date']).dt.days
+    df['DFR'], df['DTR'] = _days_to_and_from_roll(df['Trade Date'], df['Expiry'])
 
     df['Expiry'] = df['Expiry'].dt.date
     df['Trade Date'] = df['Trade Date'].dt.date
@@ -123,27 +142,41 @@ def process_vix():
 
 
 def create_calendar_spread_df(df):
-    new_data = []
-    for trade_date, group in df.groupby('Trade_Date'):
-        group = group.sort_values('Calendar_Num')
-        for i in range(len(group) - 1):
-            fut_1, fut_2 = group.iloc[i], group.iloc[i + 1]
-            new_row = {
-                'Trade_Date': trade_date,'Fut_1': fut_1['Futures'],'Open_1': fut_1['Open'],
-                'High_1': fut_1['High'],'Low_1': fut_1['Low'],'Close_1': fut_1['Close'],
-                'Total_Volume_1': fut_1['Total Volume'],'Open_Interest_1': fut_1['Open Interest'],
-                'DTM_1': fut_1['DTM'],
-                'Fut_2': fut_2['Futures'],'Open_2': fut_2['Open'],
-                'High_2': fut_2['High'],'Low_2': fut_2['Low'],'Close_2': fut_2['Close'],
-                'Total_Volume_2': fut_2['Total Volume'],'Open_Interest_2': fut_2['Open Interest'],
-                'DTM_2': fut_2['DTM'],
-                'DFR': fut_2['DFR'],'DTR': fut_2['DTR'],
-                'Calendar_Spread': f"{int(fut_1['Calendar_Num'])}-{int(fut_2['Calendar_Num'])}",
-                'spread': fut_2['Close'] - fut_1['Close']
-            }
-            new_data.append(new_row)
-    new_df = pd.DataFrame(new_data)
+    """One row per adjacent pair of contracts (by Calendar_Num) on each trade date.
 
+    Built by lining each row up with the next row of the same day, instead of
+    looping over days.
+    """
+    # same order the old per-day loop used: days ascending, then Calendar_Num
+    g = df.sort_values(['Trade_Date', 'Calendar_Num'], kind='mergesort').reset_index(drop=True)
+    g = g[g['Trade_Date'].notna()].reset_index(drop=True)
+    nxt = g.shift(-1)
+    pair = (g['Trade_Date'].iloc[:-1].to_numpy() == g['Trade_Date'].iloc[1:].to_numpy())
+    pair = np.append(pair, False)
+    f1, f2 = g[pair], nxt[pair]
+
+    def cal(x):
+        return x.astype(int).astype(str)
+
+    new_df = pd.DataFrame({
+        'Trade_Date': f1['Trade_Date'], 'Fut_1': f1['Futures'], 'Open_1': f1['Open'],
+        'High_1': f1['High'], 'Low_1': f1['Low'], 'Close_1': f1['Close'],
+        'Total_Volume_1': f1['Total Volume'], 'Open_Interest_1': f1['Open Interest'],
+        'DTM_1': f1['DTM'],
+        'Fut_2': f2['Futures'], 'Open_2': f2['Open'],
+        'High_2': f2['High'], 'Low_2': f2['Low'], 'Close_2': f2['Close'],
+        'Total_Volume_2': f2['Total Volume'], 'Open_Interest_2': f2['Open Interest'],
+        'DTM_2': f2['DTM'],
+        'DFR': f2['DFR'], 'DTR': f2['DTR'],
+        'Calendar_Spread': cal(f1['Calendar_Num']) + '-' + cal(f2['Calendar_Num']),
+        'spread': f2['Close'] - f1['Close'],
+    }).reset_index(drop=True)
+
+    # shift() turns the "next row" ints into floats; restore the original dtypes
+    for c1, c2, src_col in [('Total_Volume_1', 'Total_Volume_2', 'Total Volume'),
+                            ('Open_Interest_1', 'Open_Interest_2', 'Open Interest'),
+                            ('DTM_1', 'DTM_2', 'DTM'), (None, 'DFR', 'DFR'), (None, 'DTR', 'DTR')]:
+        new_df[c2] = new_df[c2].astype(df[src_col].dtype)
     return new_df
 
 

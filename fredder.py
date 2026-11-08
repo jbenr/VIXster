@@ -1,5 +1,6 @@
 import os
 import requests
+from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 from dotenv import load_dotenv
 import utils
@@ -18,7 +19,7 @@ def fetch_series_data(series_id, api_key):
         'api_key': api_key,
         'file_type': 'json'
     }
-    response = requests.get(url, params=params)
+    response = requests.get(url, params=params, timeout=30)
     data = response.json()
     observations = data.get('observations', [])
 
@@ -49,12 +50,14 @@ def run():
         'IG': 'BAMLC0A0CM'
     }
 
+    # Fetch all series at once (they're independent), keep them in the listed order
+    print(f"Fetching {len(series_dict)} FRED series: {', '.join(series_dict)}...")
+    with ThreadPoolExecutor(max_workers=len(series_dict)) as pool:
+        fetched = list(pool.map(lambda sid: fetch_series_data(sid, api_key), series_dict.values()))
+
     dataframes = []
-    # Fetch and display the first few rows of data for each series
-    for name, series_id in series_dict.items():
-        print(f"Fetching data for {name} (Series ID: {series_id})...")
-        df = fetch_series_data(series_id, api_key)[['value']]
-        df.rename(columns={'value':name}, inplace=True)
+    for name, df in zip(series_dict, fetched):
+        df = df[['value']].rename(columns={'value': name})
         dataframes.append(df)
 
     df = dataframes[0]
