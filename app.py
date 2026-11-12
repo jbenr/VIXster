@@ -155,69 +155,75 @@ with tabs[0]:
         st.info("No spread data loaded yet.")
 
     st.markdown("<hr style='margin-top: 1em; margin-bottom: 1em;'>", unsafe_allow_html=True)
-    # 4) Historical data
-    col1, col2 = st.columns(2)
+    # 4) Historical data. The tables are drawn into this spot after the
+    #    update button below has run, so they show the fresh files.
+    hist_area = st.container()
 
-    with col1:
-        HIST_FILE = "data/vix_spreads.parquet"
-        st.write("### Historical VIX Spreads")
-        if os.path.exists(HIST_FILE):
-            df_hist = pd.read_parquet(HIST_FILE)
-            if "Date" in df_hist.columns:
-                df_hist["Date"] = pd.to_datetime(df_hist["Date"], errors="coerce")
-                df_hist.sort_values("Date", inplace=True)
-            st.dataframe(df_hist[['1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8']].tail(10)
-                         .style
-                         .format(formatter="{:.2f}"),
-                         use_container_width=True)
-
-            df_hist.index = pd.to_datetime(df_hist.index)
-            last_update_hist = df_hist.index.max()
-            if pd.Timestamp.now() - last_update_hist >= pd.Timedelta("2 days"):
-                st.markdown(
-                    f"<span style='color:red;'>Last Update: {last_update_hist.strftime('%Y-%m-%d')}</span>",
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(f"Last Update: {last_update_hist.strftime('%Y-%m-%d')}")
-        else:
-            st.info(f"No historical spread file found at {HIST_FILE}.")
-
-    with col2:
-        FEAT_FILE = "data/fred.parquet"
-        st.write("### Historical Feature Data")
-        if os.path.exists(FEAT_FILE):
+    if st.button("Update Historical Data"):
+        with st.status("Updating historical data…", expanded=True) as status:
             try:
-                df_feat = pd.read_parquet(FEAT_FILE)
-                # If there's a date col, parse + sort
-                if "Date" in df_feat.columns:
-                    df_feat["Date"] = pd.to_datetime(df_feat["Date"], errors="coerce")
-                    df_feat.sort_values("Date", inplace=True)
-                st.dataframe(df_feat.tail(10), use_container_width=True)
+                summary = update_data.run(log=st.write)
+                label = (f"Historical data updated through {summary['through']:%b %d, %Y} "
+                         f"({summary['seconds']:.1f} s).")
+                if summary["failed"]:
+                    label += f" {len(summary['failed'])} contract(s) failed to download."
+                status.update(label=label, state="complete", expanded=False)
+            except Exception as e:
+                status.update(label=f"Data update failed: {e}", state="error")
 
-                df_feat.index = pd.to_datetime(df_feat.index)
-                last_update_feat = df_feat.index.max()
-                if pd.Timestamp.now() - last_update_feat >= pd.Timedelta("2 days"):
+    with hist_area:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            HIST_FILE = "data/vix_spreads.parquet"
+            st.write("### Historical VIX Spreads")
+            if os.path.exists(HIST_FILE):
+                df_hist = pd.read_parquet(HIST_FILE)
+                if "Date" in df_hist.columns:
+                    df_hist["Date"] = pd.to_datetime(df_hist["Date"], errors="coerce")
+                    df_hist.sort_values("Date", inplace=True)
+                st.dataframe(df_hist[['1-2', '2-3', '3-4', '4-5', '5-6', '6-7', '7-8']].tail(10)
+                             .style
+                             .format(formatter="{:.2f}"),
+                             use_container_width=True)
+
+                df_hist.index = pd.to_datetime(df_hist.index)
+                last_update_hist = df_hist.index.max()
+                if pd.Timestamp.now() - last_update_hist >= pd.Timedelta("2 days"):
                     st.markdown(
-                        f"<span style='color:red;'>Last Update: {last_update_feat.strftime('%Y-%m-%d')}</span>",
+                        f"<span style='color:red;'>Last Update: {last_update_hist.strftime('%Y-%m-%d')}</span>",
                         unsafe_allow_html=True
                     )
                 else:
-                    st.markdown(f"Last Update: {last_update_feat.strftime('%Y-%m-%d')}")
-            except Exception as ex:
-                st.error(f"Error reading {FEAT_FILE}: {ex}")
-        else:
-            st.info(f"No feature data file found at {FEAT_FILE}.")
+                    st.markdown(f"Last Update: {last_update_hist.strftime('%Y-%m-%d')}")
+            else:
+                st.info(f"No historical spread file found at {HIST_FILE}.")
 
-    if st.button("Update Historical Data"):
-        # Show a spinner message while the script runs
-        with st.spinner("Running update_data.py ..."):
-            try:
-                # Directly call the run() function from update_data.py
-                update_data.run()
-                st.success("Data updated successfully!")
-            except Exception as e:
-                st.error(f"Data update failed with error:\n{e}")
+        with col2:
+            FEAT_FILE = "data/fred.parquet"
+            st.write("### Historical Feature Data")
+            if os.path.exists(FEAT_FILE):
+                try:
+                    df_feat = pd.read_parquet(FEAT_FILE)
+                    # If there's a date col, parse + sort
+                    if "Date" in df_feat.columns:
+                        df_feat["Date"] = pd.to_datetime(df_feat["Date"], errors="coerce")
+                        df_feat.sort_values("Date", inplace=True)
+                    st.dataframe(df_feat.tail(10), use_container_width=True)
+
+                    df_feat.index = pd.to_datetime(df_feat.index)
+                    last_update_feat = df_feat.index.max()
+                    if pd.Timestamp.now() - last_update_feat >= pd.Timedelta("2 days"):
+                        st.markdown(
+                            f"<span style='color:red;'>Last Update: {last_update_feat.strftime('%Y-%m-%d')}</span>",
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        st.markdown(f"Last Update: {last_update_feat.strftime('%Y-%m-%d')}")
+                except Exception as ex:
+                    st.error(f"Error reading {FEAT_FILE}: {ex}")
+            else:
+                st.info(f"No feature data file found at {FEAT_FILE}.")
 
 
 # ------------------ MODEL TAB ------------------ #

@@ -26,13 +26,13 @@ def _fetch_contract(session, url, date):
             time.sleep(0.5 * 2 ** attempt)
 
 
-def pull_vix(exp, backfill=False, workers=8):
+def pull_vix(exp, backfill=False, workers=8, log=print):
     """Download VX contract files straight from CBOE's CDN, several at a time.
 
     Fetches contracts that haven't expired yet, plus any that expired in the
     last 10 days so their final settles are stored even if a day was missed.
+    `log` gets progress messages.
     """
-    print('Downloading VIX Futures data...')
     utils.make_dir('data/VIX')
     reg_url = "https://cdn.cboe.com/data/us/futures/market_statistics/historical_data/VX/VX_"
 
@@ -42,19 +42,23 @@ def pull_vix(exp, backfill=False, workers=8):
     if (backfill): dates = [date.strftime("%Y-%m-%d") for date in dates]
     else: dates = [date.strftime("%Y-%m-%d") for date in dates if date.date() >= cutoff]
 
+    log(f'Checking {len(dates)} VX futures contracts on CBOE…')
     with requests.Session() as session, ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(lambda d: _fetch_contract(session, reg_url, d), dates))
 
-    saved, failed = 0, []
+    saved, failed, unlisted = 0, [], 0
     for date, df, status in results:
         if df is not None and len(df) > 1:
             df.to_parquet(f'data/VIX/{date}.parquet')
             saved += 1
         elif status.startswith('failed'):
             failed.append(f'{date} ({status})')
+        else:
+            unlisted += 1
     if failed:
-        print(f"Failed to download: {', '.join(failed)}")
-    print(f'Done downloading VIX Futures data ({saved} contracts).')
+        log(f"⚠️ Couldn't download: {', '.join(failed)} (keeping the stored files)")
+    log(f'Downloaded {saved} contracts' + (f' ({unlisted} not listed yet).' if unlisted else '.'))
+    return {'saved': saved, 'failed': failed}
 
 
 def _days_to_and_from_roll(trade_dates, expiry_col):

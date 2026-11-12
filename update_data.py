@@ -9,8 +9,13 @@ from typing import Tuple, Dict
 
 # ───────────────────────────── existing flows ─────────────────────────────
 
-def run():
-    vixy.pull_vix(vix_futures_exp_dates.run_over_time_frame(2013))
+def run(log=print):
+    """Re-pull VX futures + FRED and rebuild the spread files.
+    `log` gets progress messages; returns a short summary for the UI."""
+    t0 = time.perf_counter()
+    pull = vixy.pull_vix(vix_futures_exp_dates.run_over_time_frame(2013), log=log)
+
+    log("Building the futures curve and spreads…")
     df = vixy.process_vix()
     df.to_parquet("data/vix.parquet")
     utils.pdf(df.tail(3))
@@ -26,14 +31,14 @@ def run():
     df = vixy.vix_spreads(df)
     df.to_parquet('data/vix_spreads.parquet')
     utils.pdf(df[['1-2','2-3','3-4','4-5','5-6','6-7','7-8']].tail(3))
+    last = pd.Timestamp(df.index.max())
+    log(f"VX spreads through {last:%a %b %d, %Y} ({len(df):,} days).")
 
-    print("Done pulling VIX data.")
+    fredder.run(log=log)
 
-    print("Pulling stonk data...")
-    fredder.run()
-    print("Done pulling stonk data.")
-
-    print('Scraped.')
+    seconds = time.perf_counter() - t0
+    log(f"Done in {seconds:.1f} s.")
+    return {'through': last, 'seconds': seconds, 'failed': pull['failed']}
 
 
 def live():

@@ -25,7 +25,7 @@ def fetch_series_data(series_id, api_key):
 
     df = pd.DataFrame(observations)
     if df.empty:
-        print(f"No data returned for series: {series_id}")
+        print(f"No data returned for series: {series_id}")  # run() reports it too
         return df
 
     df['date'] = pd.to_datetime(df['date'])
@@ -34,7 +34,8 @@ def fetch_series_data(series_id, api_key):
     return df
 
 
-def run():
+def run(log=print):
+    """Download the FRED series into data/fred.parquet. `log` gets progress messages."""
     series_dict = {
         # '2Y': 'DGS2',
         # '5Y': 'DGS5',
@@ -51,7 +52,7 @@ def run():
     }
 
     # Fetch all series at once (they're independent), keep them in the listed order
-    print(f"Fetching {len(series_dict)} FRED series: {', '.join(series_dict)}...")
+    log(f"Downloading {len(series_dict)} FRED series ({', '.join(series_dict)})…")
     with ThreadPoolExecutor(max_workers=len(series_dict)) as pool:
         fetched = list(pool.map(lambda sid: fetch_series_data(sid, api_key), series_dict.values()))
 
@@ -65,6 +66,13 @@ def run():
         df = pd.merge(df, d, how='left', left_index=True, right_index=True)
 
     df.index = pd.to_datetime(df.index).date
+
+    # last date each series has a value, so a stale one stands out
+    latest = []
+    for name, d in zip(series_dict, dataframes):
+        last = d[name].last_valid_index()
+        latest.append(f"{name} {last:%b %d}" if last is not None else f"{name} — no data")
+    log("FRED latest: " + ", ".join(latest))
 
     print("FRED data:")
     utils.pdf(df.tail(3))
