@@ -9,12 +9,11 @@ if [ $? -eq 0 ]; then
 fi
 
 # Create new tmux session
-tmux new-session -d -s $SESSION -n streamlit
+tmux new-session -d -s $SESSION -n site
 
-# -------------------- Window 0: Streamlit app --------------------
-tmux send-keys -t $SESSION:0 "conda activate algo" C-m
-tmux send-keys -t $SESSION:0 "cd ~/pod/VIXster" C-m
-tmux send-keys -t $SESSION:0 "streamlit run app.py" C-m
+# -------------------- Window 0: VIXster site (Dash, vixster/ package) --------------------
+# Old Streamlit app is still in app.py if ever needed: conda activate algo && streamlit run app.py
+tmux send-keys -t $SESSION:0 "cd ~/pod/VIXster && PYTHONPATH=\$PWD ~/miniconda3/envs/vixster2/bin/python -m vixster.cli serve --port 8501" C-m
 
 # -------------------- Window 1: Tailscale + Funnel --------------------
 tmux new-window -t $SESSION -n tailscale
@@ -30,9 +29,7 @@ tmux send-keys -t $SESSION:2 "sleep 10" C-m
 
 # -------------------- Window 3: Tailscale + Funnel --------------------
 tmux new-window -t $SESSION -n streamer
-tmux send-keys -t $SESSION:3 "conda activate sheet" C-m
-tmux send-keys -t $SESSION:3 "cd ~/pod/VIXster" C-m
-tmux send-keys -t $SESSION:3 "python ibkr_stream_spreads.py" C-m
+tmux send-keys -t $SESSION:3 "cd ~/pod/VIXster && PYTHONPATH=\$PWD ~/miniconda3/envs/vixster2/bin/python -m vixster.cli stream" C-m
 
 # -------------------- Attach to session --------------------
 tmux attach-session -t $SESSION
