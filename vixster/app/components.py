@@ -69,9 +69,9 @@ def spinner(text: str) -> html.Div:
 def status(label: str, lines: list[str], state: str = "running") -> html.Details:
     """st.status: a box with a spinner and the steps as they happen. When done it
     collapses to one line with a check (or a red cross); click it to see the steps.
-    state: running | complete | error."""
+    state: running | complete | error | idle."""
     icon = {"running": html.Span(className="spin"), "complete": html.Span("✓", className="status-icon"),
-            "error": html.Span("✕", className="status-icon")}[state]
+            "error": html.Span("✕", className="status-icon"), "idle": html.Span("○", className="status-icon")}[state]
     return html.Details([
         html.Summary([icon, html.Span(label, className="status-label")], className="status-head"),
         html.Div([html.Div(line, className="status-line") for line in lines], className="status-body"),

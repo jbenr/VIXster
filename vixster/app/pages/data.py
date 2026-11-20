@@ -16,9 +16,7 @@ MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 
 def layout():
     return html.Div(className="stack", children=[
-        C.card(html.Div([html.Div(id="ibkr-status"), html.Div(id="ibkr-events", className="ibkr-events")],
-                        className="ibkr-panel"),
-               html.Div(id="gw-msg"), html.Div(id="spread-table"),
+        C.card(html.Div(id="ibkr-status", className="ibkr-panel"), html.Div(id="gw-msg"), html.Div(id="spread-table"),
                title="Live Spread Quotes", class_name="card-fit",
                right=[C.button("Refresh Spread File", "spread-refresh"), C.button("IBKR Login", "gw-login")]),
         dcc.Interval(id="ibkr-poll", interval=2000),   # status, activity and quotes refresh on their own
@@ -95,15 +93,15 @@ def _history(path, cols=None, fmt="{:.2f}"):
 
 def register(app):
     @app.callback(Output("spread-table", "children"), Output("ibkr-status", "children"),
-                  Output("ibkr-events", "children"), Output("gw-login", "children"),
+                  Output("gw-login", "children"),
                   Input("spread-refresh", "n_clicks"), Input("ibkr-poll", "n_intervals"), Input("gw-msg", "children"))
     def _live(*_):
+        # Same box as Update Historical Data: open with a spinner while connecting,
+        # folded to one line once quotes are live (click it to see the steps).
         o = activity.overview()
-        status = html.Div([html.Span(className=f"dot dot-{o['tone']}"), html.Span(o["headline"])],
-                          className="ibkr-status")
-        events = [html.Div([html.Span(f"{t:%H:%M:%S}", className="ibkr-time"), html.Span(m)], className="ibkr-event")
-                  for t, m in o["events"]]
-        return _spread_table(), status, events, o["button"]
+        state = {"up": "complete", "warn": "running", "down": "idle"}[o["tone"]]
+        lines = [f"{t:%H:%M:%S}  {m}" for t, m in o["events"]]
+        return _spread_table(), C.status(o["headline"], lines, state), o["button"]
 
     @app.callback(Output("gw-msg", "children"), Input("gw-login", "n_clicks"), prevent_initial_call=True)
     def _login(_):

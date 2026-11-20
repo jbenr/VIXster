@@ -23,20 +23,17 @@ LIVE_SECONDS = 15          # quotes newer than this count as live
 # (regex on an IBC log line, what to show, phase it puts Gateway in)
 _IBC = [
     (r"IBC: Starting Gateway", "Starting IB Gateway", "starting"),
-    (r"Login dialog WINDOW_OPENED", "Login window open", "login"),
-    (r"Login attempt: (\d+)", "Entering username and password (attempt {0})", "login"),
-    (r"Second Factor Authentication initiated", "Approval sent to your phone: open IBKR Mobile and approve", "2fa"),
+    (r"Login dialog WINDOW_OPENED", None, "login"),
+    (r"Second Factor Authentication initiated", "Approval sent to your phone", "2fa"),
     (r"Second Factor Authentication; event=Closed", "Phone approval received", "login"),
     (r"(?i)second factor.*(timed out|timeout)", "Phone approval timed out: sending a new one", "login"),
     (r"Login has completed", "Logged in to IBKR", "ready"),
-    (r"Configuration tasks completed", "Gateway ready (API on port {port})", "ready"),
+
     (r"IBC returned exit status", "Gateway exited", "stopped"),
 ]
 _STREAM = [
-    (r"INFO connected to", "Quote streamer connected"),
-    (r"INFO streaming (\d+) instruments", "Streaming {0} instruments"),
-    (r"WARNING disconnected", "Quote streamer lost the connection"),
-    (r"WARNING not connected", "Quote streamer waiting for Gateway"),
+    (r"INFO streaming (\d+) instruments", "Quotes streaming"),
+    (r"WARNING disconnected", "Quotes lost the connection"),
 ]
 
 _CLICKS: deque = deque(maxlen=20)
@@ -73,7 +70,8 @@ def _ibc_events() -> tuple[list[tuple[datetime, str]], str | None, datetime | No
             if not hit:
                 continue
             when = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S") if m else mtime
-            out.append((when, text.format(*hit.groups(), port=config.IB_PORT)))
+            if text:
+                out.append((when, text.format(*hit.groups())))
             phase = ph
             if ph == "2fa":
                 sent = when
@@ -113,7 +111,7 @@ def _ago(seconds: float) -> str:
     return f"{s} s" if s < 60 else f"{s // 60}:{s % 60:02d}" if s < 3600 else f"{s // 3600} h {s % 3600 // 60} min"
 
 
-def overview(limit: int = 8) -> dict:
+def overview(limit: int = 6) -> dict:
     """{tone: up|warn|down, headline, button, events: [(time, text)]} for the page."""
     running = bool(gateway._pgrep("ibcalpha.ibc.IbcGateway"))
     api = gateway.port_open()

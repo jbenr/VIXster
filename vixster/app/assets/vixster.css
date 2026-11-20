@@ -289,14 +289,5 @@ body .dash-dropdown-option:has(input:checked) { background: rgba(241,196,15,.12)
 .stack > .stack > .stats-head { margin-bottom: 10px; }
 
 /* ── IBKR status (Data tab) ──────────────────────────────────────── */
-.ibkr-panel { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
-.ibkr-status { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text); }
-.dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
-.dot-up { background: var(--green); box-shadow: 0 0 0 3px rgba(46,204,113,.18); }
-.dot-warn { background: var(--gold); box-shadow: 0 0 0 3px rgba(241,196,15,.18); animation: pulse 1.4s ease-in-out infinite; }
-.dot-down { background: var(--dim); }
-@keyframes pulse { 50% { opacity: .35; } }
-.ibkr-events { display: flex; flex-direction: column; gap: 2px; padding-left: 19px; font-size: 12px; color: var(--ink); }
-.ibkr-event { display: flex; gap: 12px; }
-.ibkr-time { color: var(--dim); font-variant-numeric: tabular-nums; }
-@media (prefers-reduced-motion: reduce) { .dot-warn { animation: none; } }
+.ibkr-panel { margin-bottom: 12px; }
+.status-idle .status-icon { color: var(--dim); }
