@@ -291,3 +291,31 @@ body .dash-dropdown-option:has(input:checked) { background: rgba(241,196,15,.12)
 /* ── IBKR status (Data tab) ──────────────────────────────────────── */
 .ibkr-panel { margin-bottom: 12px; }
 .status-idle .status-icon { color: var(--dim); }
+
+/* ── squishy buttons ─────────────────────────────────────────────────
+   Buttons sit on a little ledge (the bottom shadow). Pressing sinks them onto
+   it and squashes them wide and flat; letting go springs them back with an
+   overshoot. The press is quick, the release is slow and bouncy. */
+.btn, .viz-range-btn {
+  --lip: #2A333E;
+  transform-origin: 50% 100%;
+  box-shadow: 0 3px 0 var(--lip);
+  transition: transform 460ms cubic-bezier(0.28, 2.1, 0.5, 1), box-shadow 460ms cubic-bezier(0.28, 2.1, 0.5, 1),
+              background 120ms, filter 120ms, border-color 120ms;
+}
+.viz-range-btn { box-shadow: 0 2px 0 var(--lip); }
+.btn-primary, .viz-ranges .selected .viz-range-btn { --lip: #8A6F05; }
+.btn:hover, .viz-range-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 0 var(--lip); }
+.viz-range-btn:hover { box-shadow: 0 3px 0 var(--lip); }
+.btn:active, .viz-ranges .dash-options-list-option:active .viz-range-btn {
+  transform: translateY(3px) scale(1.07, 0.86);
+  box-shadow: 0 0 0 var(--lip);
+  filter: brightness(0.9);
+  transition: transform 70ms ease-out, box-shadow 70ms ease-out, filter 70ms;
+}
+.viz-ranges .dash-options-list-option:active .viz-range-btn { transform: translateY(2px) scale(1.08, 0.86); }
+@media (prefers-reduced-motion: reduce) {
+  .btn, .viz-range-btn { transition: background 120ms, filter 120ms; }
+  .btn:hover, .viz-range-btn:hover { transform: none; }
+  .btn:active, .viz-ranges .dash-options-list-option:active .viz-range-btn { transform: translateY(2px); }
+}
