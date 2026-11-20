@@ -46,7 +46,19 @@ IB_CLIENT_ID = int(os.getenv("IB_CLIENT_ID", "104"))
 IB_TRADING_MODE = os.getenv("IB_TRADING_MODE", "live")
 IBC_PATH = Path(os.getenv("IBC_PATH", Path.home() / "ibc"))
 TWS_PATH = Path(os.getenv("TWS_PATH", Path.home() / "Jts"))
-TWS_MAJOR_VRSN = os.getenv("TWS_MAJOR_VRSN", "1030")
+
+
+def _newest_gateway() -> str:
+    """Newest IB Gateway installed under ~/Jts/ibgateway (e.g. "1050"). IBC 3.24 needs a
+    Gateway that bundles Java 17+, which 10.30 doesn't, so we prefer the newest."""
+    try:
+        vers = [p.name for p in (TWS_PATH / "ibgateway").iterdir() if p.name.isdigit() and (p / "jars").is_dir()]
+        return max(vers, key=int)
+    except (OSError, ValueError):
+        return "1030"
+
+
+TWS_MAJOR_VRSN = os.getenv("TWS_MAJOR_VRSN") or _newest_gateway()
 IB_DISPLAY = os.getenv("IB_DISPLAY", ":99")
 
 # ── strategy ──────────────────────────────────────────────────────────────────

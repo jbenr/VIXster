@@ -86,12 +86,13 @@ async def run_once(ib: IB) -> None:
 
 async def main() -> None:
     ib = IB()
-    delay = 5
+    delay = 5   # retry often: a refused connection is cheap, and the page waits on this after a login
     while True:
         try:
-            await ib.connectAsync(config.IB_HOST, config.IB_PORT, clientId=config.IB_CLIENT_ID, timeout=10)
+            # readonly: quotes only, and it skips the open-orders request that was timing out (~10 s)
+            await ib.connectAsync(config.IB_HOST, config.IB_PORT, clientId=config.IB_CLIENT_ID, timeout=10,
+                                  readonly=True)
             log.info("connected to %s:%s", config.IB_HOST, config.IB_PORT)
-            delay = 5
             await run_once(ib)
             log.warning("disconnected")
         except Exception as e:
@@ -100,7 +101,6 @@ async def main() -> None:
             if ib.isConnected():
                 ib.disconnect()
         await asyncio.sleep(delay)
-        delay = min(delay * 2, 60)
 
 
 def cli() -> None:

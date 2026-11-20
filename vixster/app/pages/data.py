@@ -8,7 +8,7 @@ from vixster import config
 from vixster.app import components as C
 from vixster.app import jobs
 from vixster.data import live, pipeline
-from vixster.ibkr import gateway, procs
+from vixster.ibkr import activity, gateway, procs
 from vixster.io import read_parquet
 
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
@@ -16,9 +16,12 @@ MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 
 def layout():
     return html.Div(className="stack", children=[
-        C.card(html.Div(id="gw-msg"), html.Div(id="spread-table"),
+        C.card(html.Div([html.Div(id="ibkr-status"), html.Div(id="ibkr-events", className="ibkr-events")],
+                        className="ibkr-panel"),
+               html.Div(id="gw-msg"), html.Div(id="spread-table"),
                title="Live Spread Quotes", class_name="card-fit",
                right=[C.button("Refresh Spread File", "spread-refresh"), C.button("IBKR Login", "gw-login")]),
+        dcc.Interval(id="ibkr-poll", interval=2000),   # status, activity and quotes refresh on their own
         html.H2("Historical Data"),
         html.Div([
             C.card(html.Div(id="hist-spreads"), title="Historical VIX Spreads", right=html.Span(id="hist-spreads-asof")),
@@ -91,17 +94,36 @@ def _history(path, cols=None, fmt="{:.2f}"):
 
 
 def register(app):
-    @app.callback(Output("spread-table", "children"), Input("spread-refresh", "n_clicks"))
-    def _spreads(_):
-        return _spread_table()
+    @app.callback(Output("spread-table", "children"), Output("ibkr-status", "children"),
+                  Output("ibkr-events", "children"), Output("gw-login", "children"),
+                  Input("spread-refresh", "n_clicks"), Input("ibkr-poll", "n_intervals"), Input("gw-msg", "children"))
+    def _live(*_):
+        o = activity.overview()
+        status = html.Div([html.Span(className=f"dot dot-{o['tone']}"), html.Span(o["headline"])],
+                          className="ibkr-status")
+        events = [html.Div([html.Span(f"{t:%H:%M:%S}", className="ibkr-time"), html.Span(m)], className="ibkr-event")
+                  for t, m in o["events"]]
+        return _spread_table(), status, events, o["button"]
 
     @app.callback(Output("gw-msg", "children"), Input("gw-login", "n_clicks"), prevent_initial_call=True)
     def _login(_):
+        """One button: connects when IBKR is offline, disconnects (stops Gateway) when it's running."""
         try:
-            msgs = [gateway.start(), procs.start_streamer()]   # the streamer waits for the gateway by itself
+            if gateway.port_open() or gateway.status().running:
+                activity.note("You clicked Disconnect IBKR: stopping Gateway")
+                gateway.kill()
+                if gateway.port_open():
+                    activity.note("Gateway is still up: it was started outside the site, stop it there")
+                else:
+                    activity.note("Gateway stopped. Click IBKR Login to start again")
+            else:
+                activity.note("You clicked IBKR Login: starting Gateway")
+                gateway.start()
+                procs.start_streamer()   # no-op if it's running; it waits for Gateway by itself
         except Exception as e:
-            return C.alert(f"Failed to launch IBKR Gateway. {e}")
-        return C.note(" ".join(m for m in msgs if m))
+            activity.note(f"Failed: {e}")
+            return C.alert(f"IBKR: {e}")
+        return ""
 
     @app.callback(Output("hist-spreads", "children"), Output("hist-spreads-asof", "children"),
                   Output("hist-fred", "children"), Output("hist-fred-asof", "children"),

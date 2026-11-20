@@ -190,11 +190,21 @@ def start() -> str:
     cmd = [str(IBC_DIR / "scripts" / "ibcstart.sh"), config.TWS_MAJOR_VRSN, "--gateway",
            f"--tws-path={config.TWS_PATH}", f"--ibc-path={IBC_DIR}", f"--ibc-ini={ini}",
            f"--mode={config.IB_TRADING_MODE}", "--on2fatimeout=restart"]
+    # Use the Java that came with this Gateway (its installer can record a temp path instead).
+    jre = config.TWS_PATH / "ibgateway" / config.TWS_MAJOR_VRSN / "jre" / "bin"
+    if (jre / "java").exists():
+        cmd.append(f"--java-path={jre}")
     config.LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(GATEWAY_OUT, "wb") as out:  # fresh log per start, so status reflects this run
-        subprocess.Popen(cmd, env=env, stdout=out, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, start_new_session=True, cwd=str(IBC_DIR))
-    return "Gateway starting — approve the IBKR Mobile notification on your phone."
+        proc = subprocess.Popen(cmd, env=env, stdout=out, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, start_new_session=True, cwd=str(IBC_DIR))
+    # If Gateway can't start at all (e.g. wrong Java), IBC gives up within a few seconds.
+    for _ in range(16):
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            raise RuntimeError(f"Gateway {config.TWS_MAJOR_VRSN} exited right away; see logs/gateway.out. "
+                               "IBC 3.24 needs an IB Gateway that ships Java 17 (10.30 has Java 8).")
+    return f"Gateway {config.TWS_MAJOR_VRSN} starting — approve the IBKR Mobile notification on your phone."
 
 
 def _command(cmd: str) -> bool:
@@ -219,13 +229,45 @@ def stop() -> str:
     return "Gateway stopped." if pids else "Gateway was not running."
 
 
-def restart() -> str:
-    stop()
-    for _ in range(40):
-        if not status().running:
-            break
+def _wait_stopped(seconds: float) -> bool:
+    for _ in range(int(seconds / 0.5)):
+        if not _pgrep("ibcalpha.ibc.IbcGateway"):
+            return True
         time.sleep(0.5)
+    return False
+
+
+def kill() -> None:
+    """Make sure no Gateway is left: ask IBC to stop, then TERM, then KILL."""
+    if not _pgrep("ibcalpha.ibc.IbcGateway"):
+        return
+    _command("STOP")
+    if _wait_stopped(8):
+        return
+    for sig in (15, 9):
+        for p in _pgrep("ibcalpha.ibc.IbcGateway") + _pgrep("ibcstart.sh"):
+            try:
+                os.kill(p, sig)
+            except ProcessLookupError:
+                pass
+        if _wait_stopped(5):
+            return
+    raise RuntimeError("Could not stop the old Gateway")
+
+
+def restart() -> str:
+    kill()
     return start()
+
+
+def login() -> str:
+    """What the IBKR Login button does: if Gateway is connected, leave it alone;
+    otherwise end any stuck Gateway and start a fresh one (new phone notification)."""
+    if port_open():
+        return "Gateway is already connected."
+    was_running = bool(_pgrep("ibcalpha.ibc.IbcGateway"))
+    msg = restart()
+    return ("Restarted Gateway. " if was_running else "") + msg
 
 
 if __name__ == "__main__":

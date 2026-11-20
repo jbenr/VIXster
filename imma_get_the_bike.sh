@@ -21,15 +21,11 @@ tmux send-keys -t $SESSION:1 "tailscale up --operator=\$USER || echo 'Tailscale 
 tmux send-keys -t $SESSION:1 "sleep 3" C-m
 tmux send-keys -t $SESSION:1 "tailscale funnel 8501" C-m
 
-## -------------------- Window 2: IB Gateway (IBKR) --------------------
-tmux new-window -t $SESSION -n ibkr
-tmux send-keys -t $SESSION:0 "conda activate algo" C-m
-tmux send-keys -t $SESSION:2 "./pod/VIXster/launch_ibkr.sh" C-m
-tmux send-keys -t $SESSION:2 "sleep 10" C-m
+# IB Gateway is started from the site's IBKR Login button (IBC + Gateway 10.50).
 
-# -------------------- Window 3: Tailscale + Funnel --------------------
+# -------------------- Window 2: IBKR quote streamer --------------------
 tmux new-window -t $SESSION -n streamer
-tmux send-keys -t $SESSION:3 "cd ~/pod/VIXster && PYTHONPATH=\$PWD ~/miniconda3/envs/vixster2/bin/python -m vixster.cli stream" C-m
+tmux send-keys -t $SESSION:2 "cd ~/pod/VIXster && PYTHONPATH=\$PWD ~/miniconda3/envs/vixster2/bin/python -m vixster.cli stream" C-m
 
 # -------------------- Attach to session --------------------
 tmux attach-session -t $SESSION
